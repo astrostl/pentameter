@@ -1,5 +1,7 @@
 # Pentameter - Pool Temperature Monitor
 
+![Pentameter Grafana Dashboard](pentameter.png)
+
 Pentameter is a Prometheus exporter for Pentair IntelliCenter pool controllers that connects via WebSocket and exposes pool equipment data as Prometheus metrics with pre-configured Grafana dashboards for visualization.
 
 ## Features
@@ -299,8 +301,6 @@ intellicenter_last_refresh_timestamp_seconds
 ```
 
 ## Grafana Integration
-
-![Pentameter Grafana Dashboard](pentameter.png)
 
 ### Dashboard Features
 - **Pre-configured**: Automatically provisioned "Pool Monitoring" dashboard
