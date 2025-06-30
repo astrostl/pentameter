@@ -1,0 +1,76 @@
+services:
+  pentameter:
+    image: pentameter:latest
+    container_name: pentameter
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PENTAMETER_IC_IP=${PENTAMETER_IC_IP}
+      - PENTAMETER_IC_PORT=${PENTAMETER_IC_PORT:-6680}
+      - PENTAMETER_HTTP_PORT=${PENTAMETER_HTTP_PORT:-8080}
+      - PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}
+      - PENTAMETER_DEBUG=${PENTAMETER_DEBUG:-false}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pentameter-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - pentameter-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_DATE_FORMATS_DEFAULT_TIMEZONE=browser
+      - GF_DATE_FORMATS_FULL_DATE=MMM D, YYYY h:mm:ss a
+      - GF_DATE_FORMATS_INTERVAL_SECOND=h:mm:ss a
+      - GF_DATE_FORMATS_INTERVAL_MINUTE=h:mm a
+      - GF_DATE_FORMATS_INTERVAL_HOUR=MMM DD h a
+      - GF_DATE_FORMATS_INTERVAL_DAY=MMM DD
+      - GF_DATE_FORMATS_INTERVAL_MONTH=YYYY-MM
+      - GF_DATE_FORMATS_INTERVAL_YEAR=YYYY
+    networks:
+      - pentameter-net
+
+networks:
+  pentameter-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:
