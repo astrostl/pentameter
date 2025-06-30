@@ -1,5 +1,7 @@
 # Pentameter - Pentair IntelliCenter Metrics & Dashboarding
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/astrostl/pentameter)](https://goreportcard.com/report/github.com/astrostl/pentameter)
+
 > **⚠️ AI-Generated Code Warning**: This project was "vibe coded" using generative AI and should be thoroughly reviewed before use. It comes with no warranty or guarantee of functionality, security, or reliability.
 
 ![Pentameter Grafana Dashboard](pentameter.png?v=1)
