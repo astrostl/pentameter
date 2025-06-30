@@ -1,0 +1,16 @@
+# Environment variables
+.env
+
+# Go binary
+pentameter
+
+# Log files
+*.log
+
+# Docker volumes
+grafana-data/
+prometheus-data/
+
+# Temporary files
+.DS_Store
+*.tmp
