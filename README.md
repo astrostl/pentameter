@@ -54,7 +54,7 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
    - Compatible with any monitoring tool
 
 4. **Docker Deployment**
-   - Multi-stage builds with scratch base images (~10MB)
+   - Multi-stage builds with scratch base images (~12MB)
    - Docker Compose orchestration
    - Prometheus and Grafana included
 
@@ -146,7 +146,7 @@ circuit_status{circuit="FTR01",name="Spa Heat",type="GENERIC"} 0
 ```prometheus
 # Connection monitoring
 intellicenter_connection_failure 0
-intellicenter_last_refresh_timestamp_seconds 1719636177
+intellicenter_last_refresh_timestamp_seconds 1751302319
 ```
 
 ### Data Sources
@@ -201,12 +201,12 @@ Pentameter filters IntelliCenter's ~35 circuits down to ~9 meaningful equipment 
 make build
 
 # Build Docker image
-make docker
+make docker-build
 
 # Run with Docker Compose
 make compose-up
 
-# View all available targets
+# View all available targets (now organized by category)
 make help
 ```
 
@@ -262,7 +262,7 @@ docker run -d \
 ```
 
 ### Docker Image Details
-- **Base Image**: `scratch` (minimal ~10MB image)
+- **Base Image**: `scratch` (minimal ~12MB image)
 - **Multi-stage build**: Go compilation in `golang:1.24-alpine`, final binary in scratch
 - **Health Check**: Built-in health check endpoint at `/health`
 - **Restart Policy**: `unless-stopped` for automatic recovery
@@ -313,6 +313,7 @@ intellicenter_last_refresh_timestamp_seconds
 ### Display Options
 - **Standard View**: Full dashboard at `http://localhost:3000`
 - **Kiosk Mode**: Clean display at `http://localhost:3000/d/pool-monitoring?kiosk`
+- **Recommended Dashboard**: `SERVER:PORT/d/intellicenter/intellicenter?kiosk=&autofitpanels=true`
 - **Mobile Friendly**: Responsive design for all screen sizes
 
 ### Visual Elements

@@ -34,8 +34,12 @@ Thumbs.db
 *.temp
 
 # Test coverage
+coverage.html
 coverage.out
 *.cover
+
+# Linting and analysis
+.golangci-lint-cache/
 
 # Build artifacts
 dist/
