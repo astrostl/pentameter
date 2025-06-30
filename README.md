@@ -1,4 +1,4 @@
-# Pentameter - Pool Temperature Monitor
+# Pentameter - Pentair IntelliCenter Metrics & Dashboarding
 
 > **⚠️ AI-Generated Code Warning**: This project was "vibe coded" using generative AI and should be thoroughly reviewed before use. It comes with no warranty or guarantee of functionality, security, or reliability.
 
