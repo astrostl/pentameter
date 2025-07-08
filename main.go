@@ -34,8 +34,6 @@ const (
 	httpReadTimeout         = 15 * time.Second
 	httpWriteTimeout        = 15 * time.Second
 	httpIdleTimeout         = 60 * time.Second
-	fahrenheitOffset        = 32
-	celsiusConversionFactor = 5.0 / 9.0
 )
 
 // IntelliCenter API structures.
@@ -67,16 +65,16 @@ type ObjectData struct {
 var (
 	poolTemperature = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "water_temperature_celsius",
-			Help: "Current water temperature in Celsius",
+			Name: "water_temperature_fahrenheit",
+			Help: "Current water temperature in Fahrenheit",
 		},
 		[]string{"body", "name"},
 	)
 
 	airTemperature = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "air_temperature_celsius",
-			Help: "Current outdoor air temperature in Celsius",
+			Name: "air_temperature_fahrenheit",
+			Help: "Current outdoor air temperature in Fahrenheit",
 		},
 		[]string{"sensor", "name"},
 	)
@@ -309,9 +307,8 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 				continue
 			}
 
-			// Convert from Fahrenheit to Celsius
-			tempCelsius := (tempFahrenheit - fahrenheitOffset) * celsiusConversionFactor
-			poolTemperature.WithLabelValues(subtype, name).Set(tempCelsius)
+			// Store temperature in Fahrenheit as per project standard
+			poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			log.Printf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 
@@ -392,9 +389,8 @@ func (pm *PoolMonitor) getAirTemperature() error {
 				continue
 			}
 
-			// Convert from Fahrenheit to Celsius
-			tempCelsius := (tempFahrenheit - fahrenheitOffset) * celsiusConversionFactor
-			airTemperature.WithLabelValues(subtype, name).Set(tempCelsius)
+			// Store temperature in Fahrenheit as per project standard
+			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			log.Printf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 	}
