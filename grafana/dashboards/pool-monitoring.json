@@ -469,7 +469,7 @@
       "type": "state-timeline"
     }
   ],
-  "refresh": "30s",
+  "refresh": "1m",
   "schemaVersion": 36,
   "style": "dark",
   "tags": [],
