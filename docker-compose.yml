@@ -1,5 +1,6 @@
 services:
   pentameter:
+    build: .
     image: pentameter:latest
     container_name: pentameter
     restart: unless-stopped

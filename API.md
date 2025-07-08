@@ -289,7 +289,9 @@ IntelliCenter tracks heating at multiple levels. For accurate monitoring, use bo
 
 **HTMODE Values:**
 - **0**: No heating demand (off or setpoint reached)
-- **1**: Actively calling for heat (heater firing)
+- **1**: Actively calling for heat (traditional heater firing)
+- **4**: Heat pump heating mode (UltraTemp operation)
+- **9**: Heat pump cooling mode (UltraTemp operation)
 
 **Key Parameters:**
 - **HTMODE**: Actual heating demand (most important)
@@ -297,6 +299,327 @@ IntelliCenter tracks heating at multiple levels. For accurate monitoring, use bo
 - **Circuit features** (FTR01="Spa Heat"): Enable/disable only, not active status
 
 **Best Practice:** Use `HTMODE >= 1` to detect active heating rather than relying on circuit feature STATUS.
+
+**Heat Pump Detection:** 
+- Use `HTMODE == 4` to detect heat pump heating operations
+- Use `HTMODE == 9` to detect heat pump cooling operations
+
+## Heat Pump Detection and Monitoring
+
+IntelliCenter systems with UltraTemp heat pumps support both heating and cooling operations with multiple operational modes. Heat pump monitoring requires tracking multiple object types and parameters.
+
+### Heat Pump Equipment Discovery
+
+**Heater Configuration Query:**
+```json
+{
+  "command": "GetQuery",
+  "queryName": "GetHeaterConfiguration",
+  "arguments": "",
+  "messageID": "heater-config-001"
+}
+```
+
+**Expected Response Structure:**
+```json
+{
+  "objnam": "H0001",
+  "params": {
+    "SUBTYP": "ULTRA",
+    "SNAME": "UltraTemp",
+    "DLY": "5",
+    "COMUART": "1",
+    "LISTORD": "1",
+    "ACT": "ACT"
+  }
+}
+```
+
+**Heat Pump Identification:**
+- **H0001**: Primary heat pump (SUBTYP="ULTRA")
+- **H0002**: Backup gas heater (SUBTYP="GENERIC")
+- **HXULT**: Heat pump preference setting
+
+### Operational Modes
+
+Heat pumps operate in two primary modes affecting heating priority:
+
+**UltraTemp Only:**
+- Heat pump exclusive for heating
+- No gas heater backup used
+- Cooling operations available when enabled
+
+**UltraTemp Preferred:**
+- Heat pump priority for heating
+- Gas heater as backup/supplement
+- Heat pump used first, gas heater supplements as needed
+
+### Heat Pump Status Monitoring
+
+**Real-time Heater Status:**
+```json
+{
+  "messageID": "heater-status-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=HEATER",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "SUBTYP"]}]
+}
+```
+
+**Heat Pump Response:**
+```json
+{
+  "objnam": "H0001",
+  "params": {
+    "SNAME": "UltraTemp",
+    "STATUS": "ON",
+    "SUBTYP": "ULTRA"
+  }
+}
+```
+
+### Cooling Detection
+
+Heat pumps with cooling capability require monitoring both heating and cooling setpoints:
+
+**Body Temperature Monitoring:**
+```json
+{
+  "messageID": "body-temps-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=BODY",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "TEMP", "LOTMP", "HITMP", "HTMODE"]}]
+}
+```
+
+**Cooling Logic Parameters:**
+- **TEMP**: Current water temperature
+- **LOTMP**: Low temperature setpoint (heating threshold)
+- **HITMP**: High temperature setpoint (cooling threshold)
+- **HTMODE**: Heating demand (0=off, 1=heating active)
+
+**Cooling Operation Detection:**
+- **Heating**: Triggered when TEMP < LOTMP
+- **Cooling**: Triggered when TEMP > HITMP
+- **Idle**: When LOTMP <= TEMP <= HITMP
+
+### Heat Pump Control Circuits
+
+Heat pump operations may involve multiple virtual circuits:
+
+**Circuit Discovery:**
+```json
+{
+  "messageID": "heatpump-circuits-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=CIRCUIT",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "SUBTYP"]}]
+}
+```
+
+**Key Heat Pump Circuits:**
+- **X0034**: "Heat Pump" circuit
+- **X0035**: "UltraTemp" circuit  
+- **X0044**: "Pool Heater" circuit
+- **X0051**: "Heater" circuit
+
+### Monitoring Complexity
+
+Heat pump detection requires monitoring multiple object types:
+
+1. **Body Level** (OBJTYP=BODY):
+   - Temperature comparisons (TEMP vs LOTMP/HITMP)
+   - Heating demand status (HTMODE)
+
+2. **Heater Level** (OBJTYP=HEATER):
+   - Equipment operational status
+   - Heat pump vs gas heater identification
+
+3. **Circuit Level** (OBJTYP=CIRCUIT):
+   - Virtual control circuit status
+   - Heat pump specific controls
+
+**Important Notes:**
+- Cooling operations may not be reflected in traditional HTMODE parameters
+- Heat pump operational status during cooling requires different parameter monitoring
+- Multiple heater objects may be active simultaneously in "Preferred" mode
+- Circuit status may lag behind actual equipment operation
+
+### Test Results - UltraTemp Only Heating Mode
+
+**Baseline State:**
+```json
+{
+  "Pool": {"TEMP": "92", "HTMODE": "0", "LOTMP": "86", "HITMP": "92"},
+  "Circuits": {"X0034": "OFF", "X0035": "OFF", "X0044": "OFF"}
+}
+```
+
+**UltraTemp Only Heat Activated:**
+```json
+{
+  "Pool": {"TEMP": "92", "HTMODE": "4", "LOTMP": "101", "HITMP": "104"},
+  "Circuits": {"X0034": "OFF", "X0035": "OFF", "X0044": "OFF"}
+}
+```
+
+**Key Findings:**
+- **HTMODE=4**: Indicates heat pump heating in "Only" mode
+- **Temperature Setpoints**: Both LOTMP and HITMP increase when heat pump activates
+- **Circuit Status**: Heat pump circuits (X0034, X0035, X0044) remain OFF during operation
+- **Heater Objects**: H0001 status unchanged during activation
+
+**Detection Logic:**
+- Monitor body-level `HTMODE == 4` for heat pump heating detection
+- Traditional gas heater uses `HTMODE == 1`
+- Circuit status unreliable for heat pump operational detection
+
+### Heat Pump Mode Detection
+
+**UltraTemp Only vs Preferred Mode Detection:**
+```json
+{
+  "messageID": "mode-detection-001",
+  "command": "GetParamList", 
+  "condition": "OBJTYP=BODY",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "HTSRC", "MODE", "HEATER", "HTMODE"]}]
+}
+```
+
+**UltraTemp Only Mode:**
+```json
+{
+  "Pool": {
+    "HTSRC": "H0001",
+    "MODE": "5", 
+    "HEATER": "H0001",
+    "HTMODE": "4"
+  }
+}
+```
+
+**UltraTemp Preferred Mode:**
+```json
+{
+  "Pool": {
+    "HTSRC": "HXULT",
+    "MODE": "6",
+    "HEATER": "HXULT", 
+    "HTMODE": "4"
+  }
+}
+```
+
+**Mode Detection Logic:**
+- **HTSRC="H0001"** + **MODE="5"**: UltraTemp Only (direct heat pump)
+- **HTSRC="HXULT"** + **MODE="6"**: UltraTemp Preferred (preference controller)
+- **HTMODE="4"**: Heat pump heating active (both modes)
+- **HTMODE="9"**: Heat pump cooling active (both modes)
+- **HEATER** parameter mirrors HTSRC value for confirmation
+
+### Test Results - UltraTemp Only Cooling Mode
+
+**UltraTemp Only Cooling Activated:**
+```json
+{
+  "Pool": {
+    "TEMP": "92", 
+    "HTMODE": "9", 
+    "LOTMP": "75", 
+    "HITMP": "82",
+    "HTSRC": "H0001",
+    "MODE": "5",
+    "HEATER": "H0001"
+  }
+}
+```
+
+**Cooling Detection Logic:**
+- **HTMODE="9"**: Heat pump cooling mode active
+- **TEMP > HITMP**: Cooling demand (92°F > 82°F setpoint)
+- **HTSRC="H0001"**: Confirms UltraTemp Only mode during cooling
+- **MODE="5"**: Consistent with Only mode operation
+
+### Test Results - UltraTemp Preferred Cooling Mode
+
+**UltraTemp Preferred Cooling Activated:**
+```json
+{
+  "Pool": {
+    "TEMP": "92", 
+    "HTMODE": "9", 
+    "LOTMP": "75", 
+    "HITMP": "82",
+    "HTSRC": "HXULT",
+    "MODE": "6",
+    "HEATER": "HXULT"
+  }
+}
+```
+
+**Preferred Cooling Confirmation:**
+- **HTMODE="9"**: Heat pump cooling mode (same as Only)
+- **HTSRC="HXULT"**: Confirms UltraTemp Preferred mode during cooling
+- **MODE="6"**: Consistent with Preferred mode operation
+- **Temperature setpoints**: Identical to Only mode (75°F heat, 82°F cool)
+
+### Complete Heat Pump Detection Matrix
+
+**All Operational Combinations:**
+
+| Mode | Operation | HTSRC | MODE | HTMODE | Detection Logic |
+|------|-----------|-------|------|--------|-----------------|
+| Only | Heating | H0001 | 5 | 4 | Direct heat pump heating |
+| Only | Cooling | H0001 | 5 | 9 | Direct heat pump cooling |
+| Preferred | Heating | HXULT | 6 | 4 | Preference controller heating |
+| Preferred | Cooling | HXULT | 6 | 9 | Preference controller cooling |
+| Any | Idle/Off | * | * | 0 | No heat pump operation |
+
+### Test Results - Idle/Neutral Zone Behavior
+
+**UltraTemp Preferred - Idle (Neutral Zone):**
+```json
+{
+  "Pool": {
+    "TEMP": "92", 
+    "HTMODE": "0", 
+    "LOTMP": "75", 
+    "HITMP": "94",
+    "HTSRC": "HXULT",
+    "MODE": "6",
+    "HEATER": "HXULT"
+  }
+}
+```
+
+**UltraTemp Only - Idle (Neutral Zone):**
+```json
+{
+  "Pool": {
+    "TEMP": "92", 
+    "HTMODE": "0", 
+    "LOTMP": "75", 
+    "HITMP": "94",
+    "HTSRC": "H0001",
+    "MODE": "5",
+    "HEATER": "H0001"
+  }
+}
+```
+
+**Neutral Zone Findings:**
+- **HTMODE="0"**: System idle when LOTMP < TEMP < HITMP (75°F < 92°F < 94°F)
+- **Mode Detection Persistent**: HTSRC/MODE values show current mode setting even when idle
+- **Real-time Mode Switching**: HTSRC/MODE change immediately when switching between Only/Preferred
+- **Temperature Setpoints**: Persist across mode changes
+- **Independent Operation**: Mode configuration independent of operational status
+
+**Summary Detection Logic:**
+- **HTMODE=0**: Heat pump idle/off (neutral zone: LOTMP < TEMP < HITMP)
+- **HTMODE=4**: Heat pump heating (TEMP < LOTMP)
+- **HTMODE=9**: Heat pump cooling (TEMP > HITMP)
+- **Mode Detection**: HTSRC + MODE values distinguish Only vs Preferred in all states
+- **Real-time Updates**: Mode changes reflected immediately regardless of operational status
 
 ### Connection Staleness Detection
 
