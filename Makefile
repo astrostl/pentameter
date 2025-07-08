@@ -17,7 +17,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once
+.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once
 
 # Default target
 all: build
@@ -290,6 +290,14 @@ docker-build-stack:
 	@$(DOCKER_CMD) compose up -d
 	@echo "✓ Full stack built and started"
 
+# Flush Prometheus and Grafana databases
+docker-flush:
+	@echo "🗑️  Flushing Prometheus and Grafana databases..."
+	@$(DOCKER_CMD) compose down
+	@$(DOCKER_CMD) volume rm pentameter_prometheus-data pentameter_grafana-data 2>/dev/null || true
+	@$(DOCKER_CMD) compose up -d
+	@echo "✓ Databases flushed and stack restarted"
+
 # Docker Compose shortcuts (fallback to direct docker commands if compose fails)
 compose-up:
 	@$(DOCKER_CMD) compose up -d 2>/dev/null || { \
@@ -365,6 +373,7 @@ help:
 	@echo "Docker:"
 	@echo "  docker-build - Build pentameter with aggressive cache clearing (nuclear by default)"
 	@echo "  docker-build-stack - Build full stack with complete cache clearing"
+	@echo "  docker-flush - Flush Prometheus and Grafana databases (stop, delete data, start)"
 	@echo "  compose-up   - Start with docker compose (fallback to direct docker)"
 	@echo "  compose-down - Stop docker compose (fallback to direct docker)"
 	@echo "  compose-logs - View docker compose logs with tail (fallback to direct docker)"
