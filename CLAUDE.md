@@ -51,10 +51,15 @@ Docker frequently fails to detect Go source changes and runs stale binaries. ALW
 
 ### After ANY Code Changes - MANDATORY STEPS:
 
+**⚠️ CRITICAL: ALWAYS USE NUCLEAR OPTION FOR PENTAMETER DEBUGGING ⚠️**
+
+When debugging or making ANY changes to pentameter code, ALWAYS use the nuclear approach. Standard rebuilds frequently fail due to Docker caching issues.
+
 ```bash
-# ALWAYS do this after changing main.go or any source:
+# ALWAYS do this when debugging or changing pentameter code:
 docker compose stop pentameter
-docker compose build --no-cache pentameter  
+docker system prune -f  
+docker compose build --no-cache pentameter
 docker compose start pentameter
 
 # Verify changes took effect IMMEDIATELY:
@@ -62,29 +67,25 @@ curl -s http://localhost:8080/metrics | head -5
 docker compose logs pentameter --tail 5
 ```
 
-### Nuclear Option (use when in doubt):
+### Full Stack Nuclear Option (if pentameter-specific nuclear fails):
 
 ```bash
-# When standard rebuild fails or you're unsure (PENTAMETER ONLY):
-docker compose stop pentameter
-docker system prune -f  
-docker compose build --no-cache pentameter
-docker compose start pentameter
-
-# Full stack nuclear option (only if pentameter-specific approach fails):
+# Only if the pentameter nuclear option above fails:
 docker compose down
 docker system prune -f  
 docker compose build --no-cache
 docker compose up -d
 ```
 
-### NEVER Trust These Commands for Code Changes:
+### NEVER Use These Commands for Pentameter Debugging:
 
 ```bash
 docker compose restart pentameter  # ❌ Does NOT rebuild image
 docker compose up -d               # ❌ Uses cached image  
 make docker-build                  # ❌ May use cached layers
+docker compose stop pentameter && docker compose build --no-cache pentameter && docker compose start pentameter  # ❌ Often insufficient
 ```
+
 
 ### Red Flags - Force Nuclear Rebuild:
 

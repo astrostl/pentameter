@@ -262,9 +262,11 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 	}
 
 	// Get thermal equipment status
+	log.Printf("DEBUG: About to call getThermalStatus()")
 	if err := pm.getThermalStatus(); err != nil {
 		return fmt.Errorf("failed to get thermal status: %w", err)
 	}
+	log.Printf("DEBUG: getThermalStatus() completed successfully")
 
 	return nil
 }
@@ -481,6 +483,7 @@ func (pm *PoolMonitor) getPumpData() error {
 }
 
 func (pm *PoolMonitor) getCircuitStatus() error {
+	log.Printf("DEBUG: getCircuitStatus() starting")
 	resp, err := pm.requestCircuitData()
 	if err != nil {
 		return err
@@ -491,6 +494,7 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 		pm.processCircuitObject(obj)
 	}
 
+	log.Printf("DEBUG: getCircuitStatus() completed successfully")
 	return nil
 }
 
@@ -630,21 +634,15 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string) flo
 }
 
 func (pm *PoolMonitor) getThermalStatus() error {
-	// Only process heaters that are referenced by bodies
-	if len(pm.referencedHeaters) == 0 {
-		if pm.debugMode {
-			log.Printf("DEBUG: No referenced thermal equipment found, skipping thermal status update")
-		}
-		return nil
+	// Process all heaters, not just referenced ones
+	log.Printf("DEBUG: getThermalStatus() called - Processing all thermal equipment")
+	if pm.debugMode {
+		log.Printf("DEBUG: Debug mode is enabled, referenced heaters: %d", len(pm.referencedHeaters))
 	}
 
-	// Build list of heater object names to query
-	heaterObjNames := make([]string, 0, len(pm.referencedHeaters))
-	for heaterObj := range pm.referencedHeaters {
-		heaterObjNames = append(heaterObjNames, heaterObj)
-	}
+	// Query all heaters, not just referenced ones
 
-	// Query heater details for referenced heaters
+	// Query heater details for all heaters
 	messageID := fmt.Sprintf("heater-status-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
 	sentTime := time.Now()
 
@@ -662,7 +660,7 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 	pm.pendingRequests[messageID] = sentTime
 	if pm.debugMode {
-		log.Printf("DEBUG: Sending thermal status request for %d referenced thermal devices", len(heaterObjNames))
+		log.Printf("DEBUG: Sending thermal status request for all thermal devices")
 	}
 
 	if err := pm.conn.WriteJSON(req); err != nil {
@@ -690,27 +688,36 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 	// Process heater data and update metrics
 	for _, obj := range resp.ObjectList {
-		// Only process heaters that are referenced by bodies
-		bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
-		if !isReferenced {
-			continue
-		}
-
 		name := obj.Params["SNAME"]
 		subtype := obj.Params["SUBTYP"]
+		status := obj.Params["STATUS"]
 
 		if name == "" || subtype == "" {
 			continue
 		}
 
-		// Calculate heater status based on body operational data
-		heaterStatusValue := pm.calculateHeaterStatus(bodyInfo, subtype)
+		var heaterStatusValue int
+		var statusDescription string
+
+		// Check if this heater is referenced by a body
+		bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
+		if isReferenced {
+			// Use body operational data for referenced heaters
+			heaterStatusValue = pm.calculateHeaterStatus(bodyInfo, subtype)
+			statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)", 
+				pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
+		} else {
+			// For non-referenced heaters, determine status by name matching with body heating status
+			heaterStatusValue = pm.calculateHeaterStatusFromName(name, status)
+			statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)", 
+				pm.getStatusDescription(heaterStatusValue))
+		}
 
 		// Update Prometheus metric
 		thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
 
-		log.Printf("Updated thermal status: %s (%s) = %d [%s] (Body: %s, HTMODE: %d)",
-			name, obj.ObjName, heaterStatusValue, pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
+		log.Printf("Updated thermal status: %s (%s) = %d [%s]",
+			name, obj.ObjName, heaterStatusValue, statusDescription)
 	}
 
 	return nil
@@ -733,6 +740,29 @@ func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo BodyHeaterInfo, subtype st
 	default:
 		return 0 // Unknown mode, treat as off
 	}
+}
+
+func (pm *PoolMonitor) calculateHeaterStatusFromName(heaterName, status string) int {
+	// For non-referenced heaters, try to match with body heating status
+	// Look for body names that might be associated with this heater
+	heaterNameLower := strings.ToLower(heaterName)
+	
+	// Check if any body is currently heating and matches this heater's name
+	for bodyName, isHeating := range pm.bodyHeatingStatus {
+		if strings.Contains(heaterNameLower, bodyName) || strings.Contains(bodyName, heaterNameLower) {
+			if isHeating {
+				return 1 // Heating
+			}
+			return 0 // Off
+		}
+	}
+	
+	// If no body match found, use the heater's own status if available
+	if status == "ON" {
+		return 1 // Heating
+	}
+	
+	return 0 // Off
 }
 
 func (pm *PoolMonitor) getStatusDescription(status int) string {
