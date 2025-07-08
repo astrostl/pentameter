@@ -366,7 +366,7 @@ func TestIsValidCircuit(t *testing.T) {
 	}{
 		{"C01", "Pool Light", "LIGHT", true},
 		{"FTR01", "Feature", "FEATURE", false}, // FTR objects are now features, not circuits
-		{"C02", "AUX 1", "GENERIC", false}, // Generic AUX circuits are filtered out
+		{"C02", "AUX 1", "GENERIC", false},     // Generic AUX circuits are filtered out
 		{"C03", "Custom Circuit", "CUSTOM", true},
 		{"PUMP1", "Pool Pump", "PUMP", false}, // Wrong prefix
 	}
@@ -1481,5 +1481,476 @@ func TestRequestCircuitDataMessageIDMismatch(t *testing.T) {
 
 	if poolMonitor.connected {
 		t.Error("Connection should be marked as disconnected after messageID mismatch")
+	}
+}
+
+func TestProcessFeatureObject(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Test feature with SHOMNU ending in 'w' (should be shown)
+	poolMonitor.featureConfig["FTR01"] = "1w"
+
+	obj := ObjectData{
+		ObjName: "FTR01",
+		Params: map[string]string{
+			"SNAME":  "Pool Cleaner",
+			"STATUS": "ON",
+			"SUBTYP": "CLEANER",
+		},
+	}
+
+	poolMonitor.processFeatureObject(obj, "Pool Cleaner", "ON", "CLEANER")
+
+	// Test feature with SHOMNU not ending in 'w' (should be skipped)
+	poolMonitor.featureConfig["FTR02"] = "1"
+
+	obj2 := ObjectData{
+		ObjName: "FTR02",
+		Params: map[string]string{
+			"SNAME":  "Hidden Feature",
+			"STATUS": "OFF",
+			"SUBTYP": "HIDDEN",
+		},
+	}
+
+	poolMonitor.processFeatureObject(obj2, "Hidden Feature", "OFF", "HIDDEN")
+
+	// Test feature with no config (should process normally)
+	obj3 := ObjectData{
+		ObjName: "FTR03",
+		Params: map[string]string{
+			"SNAME":  "Unknown Feature",
+			"STATUS": "ON",
+			"SUBTYP": "UNKNOWN",
+		},
+	}
+
+	poolMonitor.processFeatureObject(obj3, "Unknown Feature", "ON", "UNKNOWN")
+}
+
+func TestCalculateHeaterStatus(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	tests := []struct {
+		name     string
+		bodyInfo BodyHeaterInfo
+		expected int
+	}{
+		{
+			name: "Off - temperature outside setpoints",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: htModeOff,
+				Temp:   70.0,
+				LoTemp: 75.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusOff,
+		},
+		{
+			name: "Idle - temperature within setpoints",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: htModeOff,
+				Temp:   80.0,
+				LoTemp: 75.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusIdle,
+		},
+		{
+			name: "Heating - traditional gas heater",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: htModeHeating,
+				Temp:   75.0,
+				LoTemp: 80.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusHeating,
+		},
+		{
+			name: "Heating - heat pump heating mode",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: htModeHeatPumpHeating,
+				Temp:   75.0,
+				LoTemp: 80.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusHeating,
+		},
+		{
+			name: "Cooling - heat pump cooling mode",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: htModeHeatPumpCooling,
+				Temp:   90.0,
+				LoTemp: 80.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusCooling,
+		},
+		{
+			name: "Unknown mode",
+			bodyInfo: BodyHeaterInfo{
+				HTMode: 99, // Unknown mode
+				Temp:   80.0,
+				LoTemp: 75.0,
+				HiTemp: 85.0,
+			},
+			expected: thermalStatusOff,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := poolMonitor.calculateHeaterStatus(&test.bodyInfo, "THERMAL")
+			if result != test.expected {
+				t.Errorf("Expected %d, got %d", test.expected, result)
+			}
+		})
+	}
+}
+
+func TestCalculateHeaterStatusFromName(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Set up body heating status
+	poolMonitor.bodyHeatingStatus["pool"] = true
+	poolMonitor.bodyHeatingStatus["spa"] = false
+
+	tests := []struct {
+		name       string
+		heaterName string
+		status     string
+		expected   int
+	}{
+		{
+			name:       "Pool heater with matching body heating",
+			heaterName: "Pool Heat Pump",
+			status:     "OFF",
+			expected:   thermalStatusHeating, // Based on body status
+		},
+		{
+			name:       "Spa heater with non-heating body",
+			heaterName: "Spa Heater",
+			status:     "OFF",
+			expected:   thermalStatusOff,
+		},
+		{
+			name:       "Unknown heater with ON status",
+			heaterName: "Unknown Heater",
+			status:     "ON",
+			expected:   thermalStatusHeating,
+		},
+		{
+			name:       "Unknown heater with OFF status",
+			heaterName: "Unknown Heater",
+			status:     "OFF",
+			expected:   thermalStatusOff,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := poolMonitor.calculateHeaterStatusFromName(test.heaterName, test.status)
+			if result != test.expected {
+				t.Errorf("Expected %d, got %d", test.expected, result)
+			}
+		})
+	}
+}
+
+func TestGetStatusDescription(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	tests := []struct {
+		status   int
+		expected string
+	}{
+		{0, "off"},
+		{1, "heating"},
+		{thermalStatusIdle, "idle"},
+		{thermalStatusCooling, "cooling"},
+		{99, "unknown"}, // Unknown status
+	}
+
+	for _, test := range tests {
+		result := poolMonitor.getStatusDescription(test.status)
+		if result != test.expected {
+			t.Errorf("Status %d: expected %s, got %s", test.status, test.expected, result)
+		}
+	}
+}
+
+func TestGetThermalStatus(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=HEATER": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "HTR01",
+					Params: map[string]string{
+						"SNAME":  "Pool Heater",
+						"STATUS": "ON",
+						"SUBTYP": "THERMAL",
+						"OBJTYP": "HEATER",
+					},
+				},
+				{
+					ObjName: "HTR02",
+					Params: map[string]string{
+						"SNAME":  "Spa Heater",
+						"STATUS": "OFF",
+						"SUBTYP": "THERMAL",
+						"OBJTYP": "HEATER",
+					},
+				},
+			},
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true) // Enable debug mode
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	// Set up some referenced heaters
+	poolMonitor.referencedHeaters["HTR01"] = BodyHeaterInfo{
+		BodyName:  "Pool",
+		BodyObj:   "BODY1",
+		HeaterObj: "HTR01",
+		HTMode:    htModeHeating,
+		Temp:      75.0,
+		LoTemp:    80.0,
+		HiTemp:    85.0,
+	}
+
+	// Set up body heating status
+	poolMonitor.bodyHeatingStatus["pool"] = true
+	poolMonitor.bodyHeatingStatus["spa"] = false
+
+	err := poolMonitor.getThermalStatus()
+	if err != nil {
+		t.Fatalf("getThermalStatus failed: %v", err)
+	}
+}
+
+func TestGetThermalStatusAPIError(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=HEATER": {
+			Command:  "GetParamList",
+			Response: "500", // API error
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.getThermalStatus()
+	if err == nil {
+		t.Error("Expected error for API response 500")
+	}
+}
+
+func TestLoadFeatureConfiguration(t *testing.T) {
+	// Create a server that returns feature configuration
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+		}
+		defer conn.Close()
+
+		var req map[string]interface{}
+		if err := conn.ReadJSON(&req); err != nil {
+			return
+		}
+
+		// Return mock configuration
+		resp := map[string]interface{}{
+			"command":   "GetQuery",
+			"messageID": req["messageID"],
+			"response":  "200",
+			"answer": []interface{}{
+				map[string]interface{}{
+					"objnam": "FTR01",
+					"params": map[string]interface{}{
+						"SHOMNU": "1w",
+					},
+				},
+				map[string]interface{}{
+					"objnam": "FTR02",
+					"params": map[string]interface{}{
+						"SHOMNU": "0",
+					},
+				},
+				map[string]interface{}{
+					"objnam": "PUMP01", // Non-FTR object should be ignored
+					"params": map[string]interface{}{
+						"SHOMNU": "1w",
+					},
+				},
+			},
+		}
+
+		if err := conn.WriteJSON(resp); err != nil {
+			return
+		}
+	}))
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.LoadFeatureConfiguration(ctx)
+	if err != nil {
+		t.Fatalf("LoadFeatureConfiguration failed: %v", err)
+	}
+
+	// Check that feature configuration was loaded
+	if poolMonitor.featureConfig["FTR01"] != "1w" {
+		t.Errorf("Expected FTR01 to have SHOMNU=1w, got %s", poolMonitor.featureConfig["FTR01"])
+	}
+
+	if poolMonitor.featureConfig["FTR02"] != "0" {
+		t.Errorf("Expected FTR02 to have SHOMNU=0, got %s", poolMonitor.featureConfig["FTR02"])
+	}
+}
+
+func TestLoadFeatureConfigurationError(t *testing.T) {
+	// Create server that returns error
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+		}
+		// Close immediately to cause read error
+		conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.LoadFeatureConfiguration(ctx)
+	if err == nil {
+		t.Error("Expected error due to connection failure")
+	}
+}
+
+func TestProcessConfigurationItem(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Test valid configuration item
+	item := map[string]interface{}{
+		"objnam": "FTR01",
+		"params": map[string]interface{}{
+			"SHOMNU": "1w",
+		},
+	}
+
+	poolMonitor.processConfigurationItem(item)
+
+	if poolMonitor.featureConfig["FTR01"] != "1w" {
+		t.Errorf("Expected FTR01 to have SHOMNU=1w, got %s", poolMonitor.featureConfig["FTR01"])
+	}
+
+	// Test invalid items that should be handled gracefully
+	invalidItems := []interface{}{
+		"not-a-map",
+		map[string]interface{}{
+			// Missing objnam
+			"params": map[string]interface{}{
+				"SHOMNU": "1w",
+			},
+		},
+		map[string]interface{}{
+			"objnam": "PUMP01", // Not FTR prefix
+			"params": map[string]interface{}{
+				"SHOMNU": "1w",
+			},
+		},
+		map[string]interface{}{
+			"objnam": "FTR02",
+			// Missing params
+		},
+		map[string]interface{}{
+			"objnam": "FTR03",
+			"params": "not-a-map",
+		},
+		map[string]interface{}{
+			"objnam": "FTR04",
+			"params": map[string]interface{}{
+				// Missing SHOMNU
+			},
+		},
+	}
+
+	// These should all handle gracefully without error
+	for _, item := range invalidItems {
+		poolMonitor.processConfigurationItem(item)
+	}
+}
+
+func TestProcessBodyHeatingStatusError(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Test with invalid HTMODE value
+	poolMonitor.processBodyHeatingStatus("Pool", "invalid", "BODY1")
+
+	// Should not have added anything to bodyHeatingStatus
+	if _, exists := poolMonitor.bodyHeatingStatus["pool"]; exists {
+		t.Error("Should not have processed invalid HTMODE")
+	}
+
+	// Test with empty values
+	poolMonitor.processBodyHeatingStatus("", "1", "BODY1")
+	poolMonitor.processBodyHeatingStatus("Pool", "", "BODY1")
+
+	// Should still not have added anything
+	if _, exists := poolMonitor.bodyHeatingStatus["pool"]; exists {
+		t.Error("Should not have processed empty values")
 	}
 }

@@ -34,6 +34,19 @@ const (
 	httpReadTimeout     = 15 * time.Second
 	httpWriteTimeout    = 15 * time.Second
 	httpIdleTimeout     = 60 * time.Second
+
+	// Circuit status constants.
+	statusOn = "ON"
+
+	// Thermal status constants.
+	thermalStatusOff      = 0
+	thermalStatusHeating  = 1
+	thermalStatusIdle     = 2
+	thermalStatusCooling  = 3
+	htModeOff             = 0
+	htModeHeating         = 1
+	htModeHeatPumpHeating = 4
+	htModeHeatPumpCooling = 9
 )
 
 // IntelliCenter API structures.
@@ -272,6 +285,25 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 }
 
 func (pm *PoolMonitor) getBodyTemperatures() error {
+	resp, err := pm.requestBodyTemperatures()
+	if err != nil {
+		return err
+	}
+
+	// Update Prometheus metrics and collect heater assignments
+	referencedHeaters := make(map[string]BodyHeaterInfo)
+
+	for _, obj := range resp.ObjectList {
+		pm.processBodyObject(obj, referencedHeaters)
+	}
+
+	// Store referenced heaters for heater status processing
+	pm.referencedHeaters = referencedHeaters
+
+	return nil
+}
+
+func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error) {
 	// Create GetParamList request for body temperatures and heater status
 	messageID := fmt.Sprintf("body-temp-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
 	sentTime := time.Now()
@@ -297,14 +329,14 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 	// Send request
 	if err := pm.conn.WriteJSON(req); err != nil {
 		delete(pm.pendingRequests, messageID)
-		return fmt.Errorf("failed to send request: %w", err)
+		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	// Read response
 	var resp IntelliCenterResponse
 	if err := pm.conn.ReadJSON(&resp); err != nil {
 		delete(pm.pendingRequests, messageID)
-		return fmt.Errorf("failed to read response: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if pm.debugMode {
@@ -316,7 +348,7 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 		delete(pm.pendingRequests, messageID)
 		pm.connected = false // Mark as disconnected to trigger reconnection
 		log.Printf("ERROR: Body temp messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
-		return fmt.Errorf("messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		return nil, fmt.Errorf("messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
 	}
 
 	// Clean up pending request
@@ -326,74 +358,86 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 	}
 
 	if resp.Response != "200" {
-		return fmt.Errorf("API request failed with response: %s", resp.Response)
+		return nil, fmt.Errorf("API request failed with response: %s", resp.Response)
 	}
 
-	// Update Prometheus metrics and collect heater assignments
-	referencedHeaters := make(map[string]BodyHeaterInfo)
+	return &resp, nil
+}
 
-	for _, obj := range resp.ObjectList {
-		name := obj.Params["SNAME"]
-		tempStr := obj.Params["TEMP"]
-		subtype := obj.Params["SUBTYP"]
-		status := obj.Params["STATUS"]
-		htmodeStr := obj.Params["HTMODE"]
-		htsrc := obj.Params["HTSRC"]
-		lotmpStr := obj.Params["LOTMP"]
-		hitmpStr := obj.Params["HITMP"]
+func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[string]BodyHeaterInfo) {
+	name := obj.Params["SNAME"]
+	tempStr := obj.Params["TEMP"]
+	subtype := obj.Params["SUBTYP"]
+	status := obj.Params["STATUS"]
+	htmodeStr := obj.Params["HTMODE"]
+	htsrc := obj.Params["HTSRC"]
+	lotmpStr := obj.Params["LOTMP"]
+	hitmpStr := obj.Params["HITMP"]
 
-		if tempStr != "" && name != "" {
-			tempFahrenheit, err := strconv.ParseFloat(tempStr, 64)
-			if err != nil {
-				log.Printf("Failed to parse temperature %s for %s: %v", tempStr, name, err)
-				continue
-			}
+	pm.processBodyTemperature(name, tempStr, subtype, status)
+	pm.processBodyHeatingStatus(name, htmodeStr, obj.ObjName)
+	pm.processHeaterAssignment(name, tempStr, htmodeStr, htsrc, lotmpStr, hitmpStr, obj.ObjName, referencedHeaters)
+}
 
-			// Store temperature in Fahrenheit as per project standard
-			poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
-			log.Printf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
-		}
-
-		// Track body heating status for later circuit lookup
-		if htmodeStr != "" && name != "" {
-			htmode, err := strconv.Atoi(htmodeStr)
-			if err != nil {
-				log.Printf("Failed to parse HTMODE %s for %s: %v", htmodeStr, name, err)
-			} else {
-				// HTMODE >= 1 means heater is on (1=actively heating, 2=on but not heating)
-				pm.bodyHeatingStatus[strings.ToLower(name)] = htmode >= 1
-				log.Printf("Updated body heating status: %s (%s) HTMODE=%d [%v]", name, obj.ObjName, htmode, htmode >= 1)
-			}
-		}
-
-		// Collect heater assignments for bodies that have valid heaters
-		if htsrc != "" && htsrc != "00000" && name != "" {
-			// Parse temperature setpoints
-			temp, _ := strconv.ParseFloat(tempStr, 64)
-			lotmp, _ := strconv.ParseFloat(lotmpStr, 64)
-			hitmp, _ := strconv.ParseFloat(hitmpStr, 64)
-			htmode, _ := strconv.Atoi(htmodeStr)
-
-			referencedHeaters[htsrc] = BodyHeaterInfo{
-				BodyName:  name,
-				BodyObj:   obj.ObjName,
-				HeaterObj: htsrc,
-				HTMode:    htmode,
-				Temp:      temp,
-				LoTemp:    lotmp,
-				HiTemp:    hitmp,
-			}
-
-			if pm.debugMode {
-				log.Printf("DEBUG: Body %s (%s) references heater %s with HTMODE=%d", name, obj.ObjName, htsrc, htmode)
-			}
-		}
+func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status string) {
+	if tempStr == "" || name == "" {
+		return
 	}
 
-	// Store referenced heaters for heater status processing
-	pm.referencedHeaters = referencedHeaters
+	tempFahrenheit, err := strconv.ParseFloat(tempStr, 64)
+	if err != nil {
+		log.Printf("Failed to parse temperature %s for %s: %v", tempStr, name, err)
+		return
+	}
 
-	return nil
+	// Store temperature in Fahrenheit as per project standard
+	poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
+	log.Printf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+}
+
+func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string) {
+	if htmodeStr == "" || name == "" {
+		return
+	}
+
+	htmode, err := strconv.Atoi(htmodeStr)
+	if err != nil {
+		log.Printf("Failed to parse HTMODE %s for %s: %v", htmodeStr, name, err)
+		return
+	}
+
+	// HTMODE >= 1 means heater is on (1=actively heating, 2=on but not heating)
+	pm.bodyHeatingStatus[strings.ToLower(name)] = htmode >= 1
+	log.Printf("Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
+}
+
+func (pm *PoolMonitor) processHeaterAssignment(
+	name, tempStr, htmodeStr, htsrc, lotmpStr, hitmpStr, objName string,
+	referencedHeaters map[string]BodyHeaterInfo,
+) {
+	if htsrc == "" || htsrc == "00000" || name == "" {
+		return
+	}
+
+	// Parse temperature setpoints
+	temp, _ := strconv.ParseFloat(tempStr, 64)
+	lotmp, _ := strconv.ParseFloat(lotmpStr, 64)
+	hitmp, _ := strconv.ParseFloat(hitmpStr, 64)
+	htmode, _ := strconv.Atoi(htmodeStr)
+
+	referencedHeaters[htsrc] = BodyHeaterInfo{
+		BodyName:  name,
+		BodyObj:   objName,
+		HeaterObj: htsrc,
+		HTMode:    htmode,
+		Temp:      temp,
+		LoTemp:    lotmp,
+		HiTemp:    hitmp,
+	}
+
+	if pm.debugMode {
+		log.Printf("DEBUG: Body %s (%s) references heater %s with HTMODE=%d", name, objName, htsrc, htmode)
+	}
 }
 
 func (pm *PoolMonitor) getAirTemperature() error {
@@ -577,7 +621,7 @@ func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtyp
 
 	// Calculate feature status value
 	statusValue := 0.0
-	if status == "ON" {
+	if status == statusOn {
 		statusValue = 1.0
 	}
 
@@ -586,7 +630,6 @@ func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtyp
 
 	log.Printf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, status, statusValue)
 }
-
 
 func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string) float64 {
 	isHeaterCircuit := strings.Contains(strings.ToLower(name), "heat")
@@ -625,7 +668,7 @@ func (pm *PoolMonitor) getBodyNameFromCircuit(name string) string {
 
 func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string) float64 {
 	statusValue := 0.0
-	if status == "ON" {
+	if status == statusOn {
 		statusValue = 1.0
 	}
 
@@ -703,13 +746,13 @@ func (pm *PoolMonitor) getThermalStatus() error {
 		bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
 		if isReferenced {
 			// Use body operational data for referenced heaters
-			heaterStatusValue = pm.calculateHeaterStatus(bodyInfo, subtype)
-			statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)", 
+			heaterStatusValue = pm.calculateHeaterStatus(&bodyInfo, subtype)
+			statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)",
 				pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
 		} else {
 			// For non-referenced heaters, determine status by name matching with body heating status
 			heaterStatusValue = pm.calculateHeaterStatusFromName(name, status)
-			statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)", 
+			statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)",
 				pm.getStatusDescription(heaterStatusValue))
 		}
 
@@ -723,22 +766,22 @@ func (pm *PoolMonitor) getThermalStatus() error {
 	return nil
 }
 
-func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo BodyHeaterInfo, subtype string) int {
+func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo *BodyHeaterInfo, _ string) int {
 	switch bodyInfo.HTMode {
-	case 0:
+	case htModeOff:
 		// Determine if idle or off based on temperature setpoints
 		if bodyInfo.LoTemp <= bodyInfo.Temp && bodyInfo.Temp <= bodyInfo.HiTemp {
-			return 2 // Idle (in neutral zone)
+			return thermalStatusIdle // Idle (in neutral zone)
 		}
-		return 0 // Off (outside setpoints but not called)
-	case 1:
-		return 1 // Heating (traditional gas heater)
-	case 4:
-		return 1 // Heating (heat pump heating mode)
-	case 9:
-		return 3 // Cooling (heat pump cooling mode)
+		return thermalStatusOff // Off (outside setpoints but not called)
+	case htModeHeating:
+		return thermalStatusHeating // Heating (traditional gas heater)
+	case htModeHeatPumpHeating:
+		return thermalStatusHeating // Heating (heat pump heating mode)
+	case htModeHeatPumpCooling:
+		return thermalStatusCooling // Cooling (heat pump cooling mode)
 	default:
-		return 0 // Unknown mode, treat as off
+		return thermalStatusOff // Unknown mode, treat as off
 	}
 }
 
@@ -746,23 +789,23 @@ func (pm *PoolMonitor) calculateHeaterStatusFromName(heaterName, status string) 
 	// For non-referenced heaters, try to match with body heating status
 	// Look for body names that might be associated with this heater
 	heaterNameLower := strings.ToLower(heaterName)
-	
+
 	// Check if any body is currently heating and matches this heater's name
 	for bodyName, isHeating := range pm.bodyHeatingStatus {
 		if strings.Contains(heaterNameLower, bodyName) || strings.Contains(bodyName, heaterNameLower) {
 			if isHeating {
-				return 1 // Heating
+				return thermalStatusHeating // Heating
 			}
-			return 0 // Off
+			return thermalStatusOff // Off
 		}
 	}
-	
+
 	// If no body match found, use the heater's own status if available
-	if status == "ON" {
-		return 1 // Heating
+	if status == statusOn {
+		return thermalStatusHeating // Heating
 	}
-	
-	return 0 // Off
+
+	return thermalStatusOff // Off
 }
 
 func (pm *PoolMonitor) getStatusDescription(status int) string {
@@ -771,9 +814,9 @@ func (pm *PoolMonitor) getStatusDescription(status int) string {
 		return "off"
 	case 1:
 		return "heating"
-	case 2:
+	case thermalStatusIdle:
 		return "idle"
-	case 3:
+	case thermalStatusCooling:
 		return "cooling"
 	default:
 		return "unknown"
@@ -966,12 +1009,12 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 	return defaultValue
 }
 
-func (pm *PoolMonitor) LoadFeatureConfiguration(ctx context.Context) error {
-	messageID := fmt.Sprintf("config-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%1000000)
-	
+func (pm *PoolMonitor) LoadFeatureConfiguration(_ context.Context) error {
+	messageID := fmt.Sprintf("config-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
 	request := map[string]interface{}{
 		"command":   "GetQuery",
-		"queryName": "GetConfiguration", 
+		"queryName": "GetConfiguration",
 		"arguments": "",
 		"messageID": messageID,
 	}
@@ -998,22 +1041,45 @@ func (pm *PoolMonitor) LoadFeatureConfiguration(ctx context.Context) error {
 	delete(pm.pendingRequests, messageID)
 
 	// Parse configuration data
-	if answer, ok := resp["answer"].([]interface{}); ok {
-		for _, item := range answer {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if objName, ok := obj["objnam"].(string); ok && strings.HasPrefix(objName, "FTR") {
-					if params, ok := obj["params"].(map[string]interface{}); ok {
-						if shomnu, ok := params["SHOMNU"].(string); ok {
-							pm.featureConfig[objName] = shomnu
-							log.Printf("Loaded feature config: %s -> %s", objName, shomnu)
-						}
-					}
-				}
-			}
-		}
-	}
+	pm.parseFeatureConfiguration(resp)
 
 	return nil
+}
+
+func (pm *PoolMonitor) parseFeatureConfiguration(resp map[string]interface{}) {
+	answer, ok := resp["answer"].([]interface{})
+	if !ok {
+		return
+	}
+
+	for _, item := range answer {
+		pm.processConfigurationItem(item)
+	}
+}
+
+func (pm *PoolMonitor) processConfigurationItem(item interface{}) {
+	obj, objOK := item.(map[string]interface{})
+	if !objOK {
+		return
+	}
+
+	objName, nameOK := obj["objnam"].(string)
+	if !nameOK || !strings.HasPrefix(objName, "FTR") {
+		return
+	}
+
+	params, paramsOK := obj["params"].(map[string]interface{})
+	if !paramsOK {
+		return
+	}
+
+	shomnu, shomnuOK := params["SHOMNU"].(string)
+	if !shomnuOK {
+		return
+	}
+
+	pm.featureConfig[objName] = shomnu
+	log.Printf("Loaded feature config: %s -> %s", objName, shomnu)
 }
 
 func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Handler {

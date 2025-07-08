@@ -47,34 +47,37 @@ make quality-strict # Run all quality checks with strict enforcement
 
 **⚠️ DOCKER BUILD CACHING IS SEVERELY PROBLEMATIC ⚠️** 
 
-Docker frequently fails to detect Go source changes and runs stale binaries. ALWAYS use aggressive rebuild strategies.
+Docker frequently fails to detect Go source changes and runs stale binaries. ALWAYS use Makefile targets which implement nuclear rebuild strategies.
 
 ### After ANY Code Changes - MANDATORY STEPS:
 
-**⚠️ CRITICAL: ALWAYS USE NUCLEAR OPTION FOR PENTAMETER DEBUGGING ⚠️**
+**⚠️ CRITICAL: ALWAYS USE MAKEFILE TARGETS FOR PENTAMETER DEBUGGING ⚠️**
 
-When debugging or making ANY changes to pentameter code, ALWAYS use the nuclear approach. Standard rebuilds frequently fail due to Docker caching issues.
+When debugging or making ANY changes to pentameter code, ALWAYS use the Makefile targets. They implement nuclear rebuilds by default.
 
 ```bash
 # ALWAYS do this when debugging or changing pentameter code:
-docker compose stop pentameter
-docker system prune -f  
-docker compose build --no-cache pentameter
-docker compose start pentameter
+make docker-build
 
-# Verify changes took effect IMMEDIATELY:
-curl -s http://localhost:8080/metrics | head -5
-docker compose logs pentameter --tail 5
+# This automatically:
+# - Stops pentameter
+# - Prunes Docker system 
+# - Rebuilds with --no-cache
+# - Starts pentameter
+# - Verifies changes took effect
 ```
 
 ### Full Stack Nuclear Option (if pentameter-specific nuclear fails):
 
 ```bash
 # Only if the pentameter nuclear option above fails:
-docker compose down
-docker system prune -f  
-docker compose build --no-cache
-docker compose up -d
+make docker-build-stack
+
+# This automatically:
+# - Stops entire stack
+# - Prunes Docker system
+# - Rebuilds everything with --no-cache  
+# - Starts entire stack
 ```
 
 ### NEVER Use These Commands for Pentameter Debugging:
@@ -82,8 +85,8 @@ docker compose up -d
 ```bash
 docker compose restart pentameter  # ❌ Does NOT rebuild image
 docker compose up -d               # ❌ Uses cached image  
-make docker-build                  # ❌ May use cached layers
-docker compose stop pentameter && docker compose build --no-cache pentameter && docker compose start pentameter  # ❌ Often insufficient
+docker compose build              # ❌ May use cached layers
+docker build                      # ❌ Manual commands bypass nuclear approach
 ```
 
 
@@ -98,9 +101,9 @@ docker compose stop pentameter && docker compose build --no-cache pentameter && 
 ### Verification Commands:
 
 ```bash
-# Always verify after rebuild:
+# Always verify after rebuild (automatic with make docker-build):
 curl -s http://localhost:8080/metrics | grep "circuit_status.*THERMAL"
-docker compose logs pentameter --tail 10 | grep "Updated.*status"
+make compose-logs-once | grep "Updated.*status"
 ```
 
 **Remember: When code changes don't appear to work, it's usually Docker cache, not your code!**
@@ -125,7 +128,7 @@ The following tools are automatically installed with latest versions:
 **Quality Suites**: `dev` (build + quality), `quality` (CI-friendly warnings), `quality-strict` (enforced), `quality-enhanced` (includes race + bench), `quality-comprehensive` (maximum linter coverage)
 **Individual Quality Tools**: `fmt`, `check-fmt`, `lint`, `lint-enhanced`, `cyclo`, `vet`, `ineffassign`, `misspell`, `govulncheck`, `gocritic`, `gosec`, `staticcheck`
 **Dependency Management**: `modcheck`, `modverify`, `depcount`, `depoutdated`
-**Docker**: `docker-build`, `compose-up`, `compose-down`, `compose-logs`, `compose-logs-once`
+**Docker**: `docker-build` (nuclear by default), `docker-build-stack`, `compose-up`, `compose-down`, `compose-logs`, `compose-logs-once`
 
 ### Quality Check Levels
 
@@ -144,8 +147,10 @@ make dev         # Build + quality (full development cycle)
 
 ### Debugging
 
-Use curl to debug metrics endpoints:
+Use Makefile targets and curl to debug:
 ```bash
+make compose-logs        # View pentameter logs with tail
+make compose-logs-once   # View pentameter logs once
 curl -s http://localhost:8080/metrics    # Check pentameter service metrics
 curl -s http://localhost:9090/metrics    # Check Prometheus metrics
 curl -s http://localhost:9090/api/v1/targets  # Check scrape target status

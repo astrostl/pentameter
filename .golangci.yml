@@ -61,53 +61,158 @@ linters-settings:
         deny:
           - pkg: "log/slog"
             desc: "use standard log for now"
+  varnamelen:
+    min-name-length: 2
+    ignore-names:
+      - "i"
+      - "j"
+      - "k"
+      - "t"
+      - "w"
+      - "r"
+      - "id"
+      - "ok"
+      - "err"
+  maintidx:
+    under: 10
+  interfacebloat:
+    max: 8
+  nestif:
+    min-complexity: 5
+  gocognit:
+    min-complexity: 15
+  wrapcheck:
+    ignoreSigs:
+      - fmt.Errorf(
+      - errors.New(
+      - errors.Unwrap(
+      - .Wrap(
+      - .Wrapf(
 
 linters:
   disable-all: true
   enable:
+    - asasalint
+    - asciicheck
+    - bidichk
     - bodyclose
+    - containedctx
+    - contextcheck
+    - cyclop
+    - decorder
     - dogsled
     - dupl
+    - durationcheck
     - errcheck
+    - errchkjson
+    - errname
+    - errorlint
     - exhaustive
+    - copyloopvar
+    - forbidigo
+    - forcetypeassert
     - funlen
+    - ginkgolinter
+    - gocheckcompilerdirectives
     - gochecknoinits
+    - gocognit
     - goconst
     - gocritic
     - gocyclo
+    - godot
+    - godox
     - gofmt
+    - gofumpt
+    - goheader
     - goimports
     - mnd
+    - gomoddirectives
+    - gomodguard
     - goprintffuncname
     - gosec
     - gosimple
+    - gosmopolitan
     - govet
+    - grouper
     - ineffassign
+    - interfacebloat
     - lll
+    - loggercheck
+    - maintidx
+    - makezero
     - misspell
     - nakedret
+    - nestif
+    - nilerr
+    - nilnil
     - noctx
     - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - prealloc
+    - predeclared
+    - promlinter
+    - reassign
     - revive
+    - rowserrcheck
+    - sqlclosecheck
     - staticcheck
     - stylecheck
+    - tagalign
+    - usetesting
+    - testableexamples
+    - testpackage
+    - thelper
+    - tparallel
     - typecheck
     - unconvert
     - unparam
     - unused
+    - usestdlibvars
+    - varnamelen
+    - wastedassign
     - whitespace
+    - wrapcheck
+    - zerologlint
 
 issues:
   exclude-rules:
     - path: _test\.go
       linters:
         - mnd
-    - text: "G114:"  # Allow simple HTTP server for now
+        - varnamelen
+        - maintidx
+        - funlen
+        - gocognit
+        - gocyclo
+        - cyclop
+        - nestif
+        - wrapcheck
+        - errcheck
+        - gosec
+    - text: "G114: Use of net/http serve function that has no support for setting timeouts"
       linters:
         - gosec
-    - text: "response body must be closed"  # WebSocket connections don't need body close
+      source: "http.ListenAndServe.*8080"  # Only exclude for main server startup
+    - text: "response body must be closed"
       linters:
         - bodyclose
+      source: "websocket.DefaultDialer.Dial"  # Only exclude for WebSocket connections
+    - text: "use base unit \"celsius\" instead of \"fahrenheit\""  # Project uses Fahrenheit per requirements
+      linters:
+        - promlinter
+    - text: "variable name '.*' is too short"
+      linters:
+        - varnamelen
+      source: "for.*range"  # Short variable names in range loops are acceptable
+    - text: "exported function.*should have comment"
+      linters:
+        - revive
+      source: "func.*main"  # main function doesn't need comment
+    - text: "unused-parameter"
+      linters:
+        - revive
+      source: "func.*Handler"  # HTTP handlers often have unused parameters
 
 run:
   timeout: 5m
@@ -115,6 +220,6 @@ run:
 # golangci.com configuration
 # https://github.com/golangci/golangci/wiki/Configuration
 service:
-  golangci-lint-version: 1.54.x # use the fixed version to not introduce new linters unexpectedly
+  golangci-lint-version: 1.54.2 # use the fixed version to not introduce new linters unexpectedly
   prepare:
     - echo "here I can run custom commands, but no preparation needed for this repo"

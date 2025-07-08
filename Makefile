@@ -17,7 +17,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static clean deps test test-race bench docker-build lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once
+.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once
 
 # Default target
 all: build
@@ -75,7 +75,7 @@ check-gofumpt:
 lint:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run
 
@@ -83,7 +83,7 @@ lint:
 lint-enhanced:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run \
 		--enable=asasalint,asciicheck,bidichk,bodyclose,containedctx,contextcheck,cyclop,decorder,dogsled,dupl,durationcheck,errcheck,errchkjson,errname,errorlint,exhaustive,copyloopvar,forbidigo,forcetypeassert,funlen,ginkgolinter,gocheckcompilerdirectives,gochecknoinits,gocognit,goconst,gocritic,gocyclo,godot,godox,gofmt,gofumpt,goheader,goimports,mnd,gomoddirectives,gomodguard,goprintffuncname,gosec,gosimple,gosmopolitan,govet,grouper,ineffassign,interfacebloat,lll,loggercheck,maintidx,makezero,misspell,nakedret,nestif,nilerr,nilnil,noctx,nolintlint,nonamedreturns,nosprintfhostport,prealloc,predeclared,promlinter,reassign,revive,rowserrcheck,sqlclosecheck,staticcheck,stylecheck,tagalign,usetesting,testableexamples,testpackage,thelper,tparallel,typecheck,unconvert,unparam,unused,usestdlibvars,varnamelen,wastedassign,whitespace,wrapcheck,zerologlint
@@ -269,9 +269,26 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-# Build Docker image
+# Build Docker image (always nuclear - no cache)
 docker-build:
-	$(DOCKER_CMD) build --no-cache -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+	@echo "🚀 Building pentameter with aggressive cache clearing..."
+	@$(DOCKER_CMD) compose stop pentameter 2>/dev/null || true
+	@$(DOCKER_CMD) system prune -f
+	@$(DOCKER_CMD) compose build --no-cache pentameter
+	@$(DOCKER_CMD) compose start pentameter
+	@echo "✓ Pentameter built and started"
+	@echo "Verifying changes took effect:"
+	@sleep 2
+	@curl -s http://localhost:8080/metrics | head -5 || echo "⚠️  Metrics endpoint not ready yet"
+
+# Full stack rebuild (if needed)
+docker-build-stack:
+	@echo "🚀 Full stack build with complete cache clearing..."
+	@$(DOCKER_CMD) compose down
+	@$(DOCKER_CMD) system prune -f
+	@$(DOCKER_CMD) compose build --no-cache
+	@$(DOCKER_CMD) compose up -d
+	@echo "✓ Full stack built and started"
 
 # Docker Compose shortcuts (fallback to direct docker commands if compose fails)
 compose-up:
@@ -346,7 +363,8 @@ help:
 	@echo "  depoutdated  - Check for outdated dependencies and suggest updates"
 	@echo ""
 	@echo "Docker:"
-	@echo "  docker-build - Build Docker image"
+	@echo "  docker-build - Build pentameter with aggressive cache clearing (nuclear by default)"
+	@echo "  docker-build-stack - Build full stack with complete cache clearing"
 	@echo "  compose-up   - Start with docker compose (fallback to direct docker)"
 	@echo "  compose-down - Stop docker compose (fallback to direct docker)"
 	@echo "  compose-logs - View docker compose logs with tail (fallback to direct docker)"

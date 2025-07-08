@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-12-30
+## [0.1.1] - 2025-07-08
+
+### Added
+- Thermal equipment monitoring with separated feature metrics
+- IntelliCenter feature visibility control
+- Thermal equipment operational status display
+- Build step to docker-compose.yml for pentameter service
+
+### Changed
+- Fix thermal monitoring to process all heaters, not just referenced ones
+- Use IntelliCenter SUBTYP for all equipment metadata instead of hardcoded names
+- Set all services to 1-minute refresh cycles for better responsiveness
+- Fix temperature metrics to use Fahrenheit instead of Celsius (pool industry standard)
+
+### Fixed
+- Thermal equipment now properly processes all configured heaters
+- Equipment metadata now uses IntelliCenter's official SUBTYP classification
+- Temperature units corrected to Fahrenheit for US pool industry compatibility
+
+## [0.1.0] - 2025-06-30
 
 ### Added
 - Initial release of Pentameter - IntelliCenter Pool Controller to Prometheus metrics exporter
