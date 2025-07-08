@@ -365,7 +365,7 @@ func TestIsValidCircuit(t *testing.T) {
 		expected bool
 	}{
 		{"C01", "Pool Light", "LIGHT", true},
-		{"FTR01", "Feature", "FEATURE", true},
+		{"FTR01", "Feature", "FEATURE", false}, // FTR objects are now features, not circuits
 		{"C02", "AUX 1", "GENERIC", false}, // Generic AUX circuits are filtered out
 		{"C03", "Custom Circuit", "CUSTOM", true},
 		{"PUMP1", "Pool Pump", "PUMP", false}, // Wrong prefix
