@@ -106,7 +106,7 @@ var (
 			Name: "circuit_status",
 			Help: "Circuit on/off status (1=on, 0=off)",
 		},
-		[]string{"circuit", "name", "type"},
+		[]string{"circuit", "name", "subtyp"},
 	)
 
 	thermalStatus = prometheus.NewGaugeVec(
@@ -114,7 +114,7 @@ var (
 			Name: "thermal_status",
 			Help: "Thermal equipment operational status (0=off, 1=heating, 2=idle, 3=cooling)",
 		},
-		[]string{"heater", "name", "type"},
+		[]string{"heater", "name", "subtyp"},
 	)
 
 	featureStatus = prometheus.NewGaugeVec(
@@ -122,7 +122,7 @@ var (
 			Name: "feature_status",
 			Help: "Feature on/off status (1=on, 0=off)",
 		},
-		[]string{"feature", "name", "type"},
+		[]string{"feature", "name", "subtyp"},
 	)
 )
 
@@ -567,38 +567,12 @@ func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtyp
 		statusValue = 1.0
 	}
 
-	// Determine feature type based on name and function
-	featureType := pm.getFeatureType(name, obj.ObjName)
-
-	// Update Prometheus metric
-	featureStatus.WithLabelValues(obj.ObjName, name, featureType).Set(statusValue)
+	// Update Prometheus metric using IntelliCenter's SUBTYP
+	featureStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
 
 	log.Printf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, status, statusValue)
 }
 
-func (pm *PoolMonitor) getFeatureType(name, objName string) string {
-	lowerName := strings.ToLower(name)
-
-	// Classify features by function
-	if strings.Contains(lowerName, "heat") {
-		return "THERMAL"
-	}
-	if strings.Contains(lowerName, "jet") {
-		return "JETS"
-	}
-	if strings.Contains(lowerName, "fountain") || strings.Contains(lowerName, "water") {
-		return "WATER"
-	}
-	if strings.Contains(lowerName, "light") {
-		return "LIGHT"
-	}
-	if strings.Contains(lowerName, "cool") || strings.Contains(lowerName, "chill") {
-		return "THERMAL"
-	}
-
-	// Default to GENERIC for unknown features
-	return "GENERIC"
-}
 
 func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string) float64 {
 	isHeaterCircuit := strings.Contains(strings.ToLower(name), "heat")

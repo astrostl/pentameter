@@ -463,9 +463,29 @@
           "interval": "",
           "legendFormat": "{{name}}",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "feature_status",
+          "interval": "",
+          "legendFormat": "{{name}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "thermal_status",
+          "interval": "",
+          "legendFormat": "{{name}}",
+          "refId": "C"
         }
       ],
-      "title": "Circuit Status", 
+      "title": "Equipment Status", 
       "type": "state-timeline"
     }
   ],
