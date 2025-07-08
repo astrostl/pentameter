@@ -647,3 +647,63 @@ if resp.MessageID != messageID {
 - Works regardless of equipment stability
 
 **Alternative methods** (response timing, data variance tracking) are less reliable due to false positives.
+
+### Feature Display Control (SHOMNU Parameter)
+
+IntelliCenter features have a "Show as Feature" setting in the web interface that controls whether they appear as user-accessible features. This setting is encoded in the `SHOMNU` parameter.
+
+**Discovery Method:**
+```json
+{
+  "command": "GetQuery",
+  "queryName": "GetConfiguration",
+  "arguments": "",
+  "messageID": "config-001"
+}
+```
+
+**SHOMNU Encoding:**
+- **Show as Feature: YES** → SHOMNU ends with 'w' (e.g., `"fcsrepvhzmtow"`)
+- **Show as Feature: NO** → SHOMNU without 'w' (e.g., `"fcsrepvhzmto"`)
+
+**Real-time Verification:**
+```json
+{
+  "messageID": "feature-display-check",
+  "command": "GetParamList",
+  "condition": "OBJTYP=CIRCUIT",
+  "objectList": [{"objnam": "FTR01", "keys": ["SNAME", "SHOMNU"]}]
+}
+```
+
+**Response Examples:**
+
+Feature enabled:
+```json
+{"objnam": "FTR01", "params": {"SNAME": "Spa Heat", "SHOMNU": "fcsrepvhzmtow"}}
+```
+
+Feature disabled:
+```json
+{"objnam": "FTR01", "params": {"SNAME": "Spa Heat", "SHOMNU": "fcsrepvhzmto"}}
+```
+
+**Implementation Pattern:**
+```go
+// Respect IntelliCenter's "Show as Feature" setting
+if !strings.HasSuffix(shomnu, "w") {
+    // User has disabled "Show as Feature" - skip this feature
+    return
+}
+```
+
+**Use Cases:**
+- **Eliminate duplicate controls** (e.g., "Spa Heat" feature vs "Spa Heater" thermal equipment)
+- **Respect user configuration** (users control what appears as features)
+- **Universal compatibility** (works with any IntelliCenter setup)
+
+**Benefits:**
+- No hardcoded equipment names or logic
+- User-controlled through IntelliCenter interface
+- Automatically handles equipment/feature relationships
+- Works across different pool configurations

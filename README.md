@@ -24,6 +24,7 @@ Pentameter is a Prometheus exporter for Pentair IntelliCenter pool controllers t
 
 ### Smart Features
 - **Intelligent Filtering**: Focus on meaningful equipment vs virtual controls
+- **User-Controlled Feature Visibility**: Respects IntelliCenter's "Show as Feature" settings
 - **Graceful Degradation**: Handle missing sensors without errors
 - **Browser Compatibility**: Standard metrics endpoint works everywhere
 
@@ -333,3 +334,54 @@ air_temperature_fahrenheit{sensor="AIR"}
 intellicenter_connection_failure
 intellicenter_last_refresh_timestamp_seconds
 ```
+
+## Feature Visibility Control
+
+Pentameter respects IntelliCenter's "Show as Feature" settings to avoid duplicate controls and maintain clean dashboards.
+
+### How It Works
+
+IntelliCenter allows users to control whether features appear in the interface through a "Show as Feature" checkbox in the Feature Circuits configuration. Pentameter automatically detects and respects this setting.
+
+**Common Use Case**: Pool heating equipment often appears as both:
+- **Feature**: User control (e.g., "Spa Heat" - enable/disable heating)  
+- **Thermal Equipment**: Actual equipment status (e.g., "Spa Heater" - heating/idle/cooling)
+
+This creates duplication in monitoring dashboards where both the user control and equipment status are shown.
+
+### User Control
+
+Users can eliminate this duplication through their IntelliCenter interface:
+
+1. **Access IntelliCenter** → Settings → Feature Circuits
+2. **Select the feature** (e.g., "Spa Heat")
+3. **Uncheck "Show as Feature"** to hide the user control
+4. **Keep thermal equipment monitoring** for actual operational status
+
+### Technical Implementation
+
+Pentameter uses IntelliCenter's `SHOMNU` parameter to detect the "Show as Feature" setting:
+
+- **Show as Feature: YES** → Feature appears in `feature_status` metrics
+- **Show as Feature: NO** → Feature is automatically hidden from metrics
+
+### Benefits
+
+- **User-Controlled**: No hardcoded logic - users decide what to show
+- **Universal**: Works with any equipment configuration and naming
+- **Clean Dashboards**: Eliminates duplicate controls when desired
+- **Flexible**: Users can show both if they want different information
+
+### Example Scenarios
+
+**Scenario 1: Show Both Controls**
+- `feature_status{name="Spa Heat"}` → User enable/disable control
+- `thermal_status{name="Spa Heater"}` → Equipment operational status
+- **Use Case**: Monitor both user intent and equipment response
+
+**Scenario 2: Show Equipment Only**  
+- User disables "Show as Feature" for "Spa Heat"
+- Only `thermal_status{name="Spa Heater"}` appears
+- **Use Case**: Focus on equipment operation, control via IntelliCenter
+
+This approach ensures Pentameter works universally across different pool configurations while giving users full control over their monitoring interface.

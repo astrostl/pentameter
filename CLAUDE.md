@@ -1,5 +1,35 @@
 # Claude Development Guide
 
+## Design Philosophy - CRITICAL
+
+**⚠️ UNIVERSAL COMPATIBILITY IS MANDATORY ⚠️**
+
+This application must work with ANY IntelliCenter configuration, not just our specific setup. All code must be generic and configuration-agnostic.
+
+### Forbidden Practices:
+- **NO hardcoded equipment names** (e.g., "Pool Heat Pump", "Spa Heater", "UltraTemp")
+- **NO assumptions about specific circuits** (e.g., C0001=Spa, C0002=Air Blower)
+- **NO name-based logic** (e.g., if name contains "heat" then...)
+- **NO configuration-specific filtering** (e.g., skip FTR01 because it's heating)
+
+### Required Practices:
+- **Use IntelliCenter's official metadata** (OBJTYP, SUBTYP, object IDs)
+- **Pass through API data directly** without interpretation
+- **Design for any equipment configuration** (different names, different circuits, different features)
+- **Test with the mindset**: "Would this work on someone else's pool?"
+
+### Examples:
+❌ `if name == "Spa Heat"` (hardcoded to our config)
+✅ `if subtype == "THERMAL"` (uses IntelliCenter's classification)
+
+❌ `skip FTR01` (specific to our spa heating setup)  
+✅ `process all FTR objects` (works with any feature configuration)
+
+❌ `"Pool Heat Pump"` in dashboard field overrides
+✅ `.*subtyp="ULTRA".*` for heat pump detection
+
+**Remember: Other users have different equipment names, different circuit assignments, and different feature configurations. The code must work universally.**
+
 ## Build System
 
 This project uses a well-organized Makefile with pinned tool versions for reproducible builds.

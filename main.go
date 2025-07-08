@@ -133,6 +133,7 @@ type PoolMonitor struct {
 	bodyHeatingStatus map[string]bool           // Track which bodies are actively heating
 	referencedHeaters map[string]BodyHeaterInfo // Track body-to-heater assignments
 	pendingRequests   map[string]time.Time      // Track messageID -> request time
+	featureConfig     map[string]string         // Track feature objnam -> SHOMNU for visibility
 	intelliCenterURL  string
 	retryConfig       RetryConfig
 	connected         bool
@@ -171,6 +172,7 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode bool) *
 		bodyHeatingStatus: make(map[string]bool),
 		referencedHeaters: make(map[string]BodyHeaterInfo),
 		pendingRequests:   make(map[string]time.Time),
+		featureConfig:     make(map[string]string),
 		debugMode:         debugMode,
 	}
 }
@@ -561,6 +563,14 @@ func (pm *PoolMonitor) isValidCircuit(objName, name, subtype string) bool {
 }
 
 func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtype string) {
+	// Check if feature should be shown based on IntelliCenter's "Show as Feature" setting
+	if shomnu, exists := pm.featureConfig[obj.ObjName]; exists {
+		if !strings.HasSuffix(shomnu, "w") {
+			log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, obj.ObjName, shomnu)
+			return
+		}
+	}
+
 	// Calculate feature status value
 	statusValue := 0.0
 	if status == "ON" {
@@ -883,6 +893,8 @@ func (pm *PoolMonitor) StartTemperaturePolling(ctx context.Context, interval tim
 	// Get initial reading with connection check
 	if err := pm.EnsureConnected(ctx); err != nil {
 		log.Printf("Failed to establish initial connection: %v", err)
+	} else if err := pm.LoadFeatureConfiguration(ctx); err != nil {
+		log.Printf("Failed to load feature configuration: %v", err)
 	} else if err := pm.GetTemperatures(ctx); err != nil {
 		log.Printf("Failed to get initial temperatures: %v", err)
 	} else {
@@ -922,6 +934,56 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func (pm *PoolMonitor) LoadFeatureConfiguration(ctx context.Context) error {
+	messageID := fmt.Sprintf("config-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%1000000)
+	
+	request := map[string]interface{}{
+		"command":   "GetQuery",
+		"queryName": "GetConfiguration", 
+		"arguments": "",
+		"messageID": messageID,
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+	if err := pm.conn.WriteJSON(request); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send configuration request: %w", err)
+	}
+
+	// Read response
+	var resp map[string]interface{}
+	if err := pm.conn.ReadJSON(&resp); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read configuration response: %w", err)
+	}
+
+	// Validate response correlation
+	if respMessageID, ok := resp["messageID"].(string); !ok || respMessageID != messageID {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("messageID mismatch: sent %s, received %v", messageID, resp["messageID"])
+	}
+
+	delete(pm.pendingRequests, messageID)
+
+	// Parse configuration data
+	if answer, ok := resp["answer"].([]interface{}); ok {
+		for _, item := range answer {
+			if obj, ok := item.(map[string]interface{}); ok {
+				if objName, ok := obj["objnam"].(string); ok && strings.HasPrefix(objName, "FTR") {
+					if params, ok := obj["params"].(map[string]interface{}); ok {
+						if shomnu, ok := params["SHOMNU"].(string); ok {
+							pm.featureConfig[objName] = shomnu
+							log.Printf("Loaded feature config: %s -> %s", objName, shomnu)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Handler {
