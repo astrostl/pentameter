@@ -119,7 +119,7 @@ go run main.go --http-port 9090
 - **Health**: `http://localhost:8080/health` - Health check
 - **Prometheus**: `http://localhost:9090` - Prometheus web interface
 - **Grafana**: `http://localhost:3000` - Grafana dashboards (no login required)
-- **Kiosk Mode**: `http://localhost:3000/d/pool-monitoring?kiosk` - Clean dashboard display
+- **Kiosk Mode**: `http://localhost:3000/d/intellicenter/intellicenter?kiosk` - Clean dashboard display
 
 ## Metrics Reference
 
@@ -315,7 +315,7 @@ intellicenter_last_refresh_timestamp_seconds
 
 ### Display Options
 - **Standard View**: Full dashboard at `http://localhost:3000`
-- **Kiosk Mode**: Clean display at `http://localhost:3000/d/pool-monitoring?kiosk`
+- **Kiosk Mode**: Clean display at `http://localhost:3000/d/intellicenter/intellicenter?kiosk`
 - **Recommended Dashboard**: `SERVER:PORT/d/intellicenter/intellicenter?kiosk=&autofitpanels=true`
 - **Mobile Friendly**: Responsive design for all screen sizes
 
