@@ -130,6 +130,22 @@ var (
 		[]string{"heater", "name", "subtyp"},
 	)
 
+	thermalLowSetpoint = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "thermal_low_setpoint_fahrenheit",
+			Help: "Heating target temperature in Fahrenheit (turn on heating when temp drops below this)",
+		},
+		[]string{"heater", "name", "subtyp"},
+	)
+
+	thermalHighSetpoint = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "thermal_high_setpoint_fahrenheit",
+			Help: "Cooling target temperature in Fahrenheit (turn on cooling when temp rises above this)",
+		},
+		[]string{"heater", "name", "subtyp"},
+	)
+
 	featureStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "feature_status",
@@ -759,6 +775,22 @@ func (pm *PoolMonitor) getThermalStatus() error {
 		// Update Prometheus metric
 		thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
 
+		// Emit setpoint metrics when heating, cooling, or idle (not off) and we have body info
+		if isReferenced {
+			if heaterStatusValue == 1 || heaterStatusValue == 2 { // Heating or Idle
+				thermalLowSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.LoTemp)
+			} else {
+				// Remove low setpoint metric when not heating/idle
+				thermalLowSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
+			}
+			if heaterStatusValue == 3 || heaterStatusValue == 2 { // Cooling or Idle (heat pumps can both heat and cool)
+				thermalHighSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.HiTemp)
+			} else {
+				// Remove high setpoint metric when not cooling/idle
+				thermalHighSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
+			}
+		}
+
 		log.Printf("Updated thermal status: %s (%s) = %d [%s]",
 			name, obj.ObjName, heaterStatusValue, statusDescription)
 	}
@@ -1126,6 +1158,8 @@ func main() {
 	registry.MustRegister(pumpRPM)
 	registry.MustRegister(circuitStatus)
 	registry.MustRegister(thermalStatus)
+	registry.MustRegister(thermalLowSetpoint)
+	registry.MustRegister(thermalHighSetpoint)
 	registry.MustRegister(featureStatus)
 
 	// Create pool monitor
