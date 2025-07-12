@@ -29,7 +29,7 @@ const (
 	maxDelaySeconds     = 30
 	backoffFactor       = 2.0
 	healthCheckInterval = 30 * time.Second
-	defaultPollInterval = 300
+	defaultPollInterval = 60
 	complexityThreshold = 15
 	httpReadTimeout     = 15 * time.Second
 	httpWriteTimeout    = 15 * time.Second

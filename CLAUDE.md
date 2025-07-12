@@ -197,3 +197,29 @@ When adding new equipment monitoring, always query the IntelliCenter configurati
 - **Scalability**: Type-based approach works with any equipment names or future equipment additions
 
 When adding new monitoring capabilities, always ask: "How can this integrate seamlessly into the existing Prometheus/Grafana workflow?" Prefer extending existing metrics over creating new ones.
+
+### Polling and Scraping Intervals
+
+The system uses consistent 1-minute (60-second) intervals across all components. There are three key interval settings:
+
+1. **Pentameter Polling Interval** (`main.go:32`): How often pentameter queries IntelliCenter
+   ```go
+   defaultPollInterval = 60  // seconds
+   ```
+
+2. **Prometheus Scraping Interval** (`prometheus.yml:2,9`): How often Prometheus scrapes pentameter metrics
+   ```yaml
+   global:
+     scrape_interval: 60s
+   scrape_configs:
+     - job_name: 'pentameter'
+       scrape_interval: 60s
+   ```
+
+3. **Docker Health Check Interval** (`docker-compose.yml:17`): How often Docker checks pentameter health
+   ```yaml
+   healthcheck:
+     interval: 60s
+   ```
+
+**To change intervals**: Update all three locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default.
