@@ -156,6 +156,14 @@ curl -s http://localhost:9090/metrics    # Check Prometheus metrics
 curl -s http://localhost:9090/api/v1/targets  # Check scrape target status
 ```
 
+### IntelliCenter Connection
+
+The IntelliCenter IP address is stored in `.env` as `PENTAMETER_IC_IP`. The WebSocket port is always 6680. Always source this for commands requiring the IntelliCenter IP:
+```bash
+source .env
+echo '{"command":"GetHardwareDefinition"}' | websocat ws://$PENTAMETER_IC_IP:6680
+```
+
 ### Temperature Units
 
 **IMPORTANT**: This project uses Fahrenheit for all temperature metrics, not Celsius.
@@ -200,7 +208,7 @@ When adding new monitoring capabilities, always ask: "How can this integrate sea
 
 ### Polling and Scraping Intervals
 
-The system uses consistent 1-minute (60-second) intervals across all components. There are three key interval settings:
+The system uses consistent 1-minute (60-second) intervals across all components. There are four key interval settings:
 
 1. **Pentameter Polling Interval** (`main.go:32`): How often pentameter queries IntelliCenter
    ```go
@@ -222,4 +230,10 @@ The system uses consistent 1-minute (60-second) intervals across all components.
      interval: 60s
    ```
 
-**To change intervals**: Update all three locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default.
+4. **Prometheus Staleness Period** (`docker-compose.yml:41`): How long Prometheus retains metrics after they stop being emitted
+   ```yaml
+   command:
+     - '--query.lookback-delta=1m'
+   ```
+
+**To change intervals**: Update all four locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all four settings proportionally to maintain the 1:1:1:1 ratio for optimal metric freshness and cleanup behavior.

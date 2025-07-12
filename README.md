@@ -145,12 +145,37 @@ circuit_status{circuit="C0003",name="Pool Light",type="LIGHT"} 0
 circuit_status{circuit="FTR01",name="Spa Heat",type="GENERIC"} 0
 ```
 
+### Thermal Equipment Metrics
+```prometheus
+# Thermal equipment status (0=off, 1=heating, 2=idle, 3=cooling)
+thermal_status{heater="H0002",name="Spa Heater",subtyp="GENERIC"} 2
+
+# Temperature setpoints (Fahrenheit)
+thermal_low_setpoint_fahrenheit{heater="H0002",name="Spa Heater",subtyp="GENERIC"} 95
+thermal_high_setpoint_fahrenheit{heater="H0001",name="Pool Heat Pump",subtyp="ULTRA"} 88
+```
+
+**Setpoint Display Logic:**
+- **Heatpoint (low setpoint)**: Always shown for any assigned heater
+- **Coolpoint (high setpoint)**: Only shown when < 100°F and equipment is idle or cooling
+- **100°F Threshold**: Filters out impractical cooling setpoints from heating-only equipment
+
 ### System Health Metrics
 ```prometheus
 # Connection monitoring
 intellicenter_connection_failure 0
 intellicenter_last_refresh_timestamp_seconds 1751302319
+
+# Equipment connection status (1=connected, 0=disconnected)
+thermal_status{heater="H0001",name="Pool Heat Pump",subtyp="ULTRA"} 0
+pump_status{pump="PMP01",name="VS",subtyp="PUMP"} 1
 ```
+
+**Connection Status Behavior:**
+- **Service Level**: `intellicenter_connection_failure` tracks WebSocket connectivity to IntelliCenter
+- **Equipment Level**: Individual equipment metrics disappear when equipment is offline/disconnected
+- **Graceful Degradation**: Missing equipment doesn't cause service failures
+- **Automatic Recovery**: Equipment metrics reappear when equipment comes back online
 
 ### Data Sources
 
@@ -160,16 +185,31 @@ intellicenter_last_refresh_timestamp_seconds 1751302319
 | Air Temperature | Outdoor sensor | Object _A135 | PROBE |
 | Pump RPM | Variable speed pumps | OBJTYP=PUMP | RPM |
 | Circuit Status | Equipment controls | OBJTYP=CIRCUIT | STATUS |
-| Connection Health | Internal monitoring | N/A | Health checks |
+| Thermal Status | Heating equipment | OBJTYP=HEATER | STATUS + HTMODE |
+| Thermal Setpoints | Pool/Spa bodies | OBJTYP=BODY | LOTMP, HITMP |
+| Connection Health | Internal monitoring | N/A | WebSocket health checks |
+| Equipment Health | Individual equipment | API responses | Missing data = offline |
 | Refresh Timestamp | Internal tracking | N/A | Unix timestamp |
 
 ## Connection Reliability
 
-### Automatic Recovery
+### Service-Level Connection Management
 - **Exponential Backoff**: 1s → 2s → 4s → 8s → 16s → 30s max
 - **Health Checks**: WebSocket ping/pong every 30 seconds
 - **Retry Limits**: Maximum 5 attempts before giving up
-- **Graceful Degradation**: Continue operation during connection issues
+- **Connection Failure Metric**: `intellicenter_connection_failure` (0=connected, 1=failed)
+
+### Equipment-Level Connection Handling
+- **Individual Equipment Status**: Each piece of equipment reports its own connection state
+- **Missing Data Detection**: Equipment metrics disappear when equipment goes offline
+- **No Service Impact**: Individual equipment failures don't affect service or other equipment
+- **Automatic Reappearance**: Equipment metrics return when equipment comes back online
+
+### Graceful Degradation Examples
+- **Pump Offline**: `pump_rpm` metrics disappear, water temperature monitoring continues
+- **Heater Offline**: `thermal_status` metrics disappear, circuit monitoring continues  
+- **Sensor Offline**: `air_temperature` metrics disappear, pool/spa monitoring continues
+- **Service Recovery**: All equipment metrics reappear when service reconnects to IntelliCenter
 
 ### Configuration
 ```go

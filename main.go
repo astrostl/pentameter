@@ -775,20 +775,20 @@ func (pm *PoolMonitor) getThermalStatus() error {
 		// Update Prometheus metric
 		thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
 
-		// Emit setpoint metrics when heating, cooling, or idle (not off) and we have body info
+		// Always show heatpoint for referenced heaters
 		if isReferenced {
-			if heaterStatusValue == 1 || heaterStatusValue == 2 { // Heating or Idle
-				thermalLowSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.LoTemp)
-			} else {
-				// Remove low setpoint metric when not heating/idle
-				thermalLowSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
-			}
-			if heaterStatusValue == 3 || heaterStatusValue == 2 { // Cooling or Idle (heat pumps can both heat and cool)
-				thermalHighSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.HiTemp)
-			} else {
-				// Remove high setpoint metric when not cooling/idle
-				thermalHighSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
-			}
+			thermalLowSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.LoTemp)
+		} else {
+			// Remove low setpoint metric when not referenced
+			thermalLowSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
+		}
+		
+		// Only show coolpoint if realistic temperature (< 100°F) and relevant state
+		if isReferenced && bodyInfo.HiTemp < 100 && (heaterStatusValue == 3 || heaterStatusValue == 2) { // Cooling or Idle with realistic setpoint
+			thermalHighSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.HiTemp)
+		} else {
+			// Remove high setpoint metric when >= 100°F, not cooling/idle, or not referenced
+			thermalHighSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
 		}
 
 		log.Printf("Updated thermal status: %s (%s) = %d [%s]",

@@ -38,6 +38,7 @@ services:
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
       - '--web.enable-admin-api'
+      - '--query.lookback-delta=1m'
     networks:
       - pentameter-net
 
