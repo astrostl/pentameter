@@ -300,6 +300,32 @@ IntelliCenter tracks heating at multiple levels. For accurate monitoring, use bo
 
 **Best Practice:** Use `HTMODE >= 1` to detect active heating rather than relying on circuit feature STATUS.
 
+### Heater Status Detection Logic
+
+For reliable on/off/idle detection, use the combination of HTMODE and HTSRC:
+
+**Active Heating/Cooling:**
+- **HTMODE=1** + **HTSRC="H0002"** (or other heater ID): Traditional heater actively heating
+- **HTMODE=4** + **HTSRC="H0001"**: Heat pump actively heating
+- **HTMODE=9** + **HTSRC="H0001"**: Heat pump actively cooling
+
+**Idle (System Enabled, Setpoint Satisfied):**
+- **HTMODE=0** + **HTSRC="H0002"** (or other heater ID): Heater assigned but not currently demanded
+
+**Off (System Disabled):**
+- **HTSRC="00000"** (regardless of HTMODE): No heater assigned, system off
+
+**Detection Logic:**
+1. If **HTSRC="00000"** → System is **OFF**
+2. If **HTSRC** points to heater AND **HTMODE≥1** → System is **ACTIVE** (heating/cooling)
+3. If **HTSRC** points to heater AND **HTMODE=0** → System is **IDLE** (enabled but satisfied)
+
+**Critical Notes:**
+- HTSRC="00000" definitively indicates the heating system is OFF (regardless of HTMODE value)
+- HTSRC pointing to a heater (H0001, H0002, etc.) indicates the system is ON
+- HTMODE determines operational demand when a heater is assigned
+- Temperature comparison logic (LOTMP/HITMP vs TEMP) is not required for basic on/off/idle detection
+
 **Heat Pump Detection:** 
 - Use `HTMODE == 4` to detect heat pump heating operations
 - Use `HTMODE == 9` to detect heat pump cooling operations

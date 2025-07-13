@@ -125,7 +125,7 @@ var (
 	thermalStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "thermal_status",
-			Help: "Thermal equipment operational status (0=off, 1=heating, 2=idle, 3=cooling)",
+			Help: "Thermal equipment operational status derived from IntelliCenter HTMODE+HTSRC (0=off, 1=heating, 2=idle, 3=cooling). Note: 'idle' is pentameter's interpretation of HTMODE=0+assigned heater, not an IntelliCenter native status.",
 		},
 		[]string{"heater", "name", "subtyp"},
 	)
@@ -801,11 +801,7 @@ func (pm *PoolMonitor) getThermalStatus() error {
 func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo *BodyHeaterInfo, _ string) int {
 	switch bodyInfo.HTMode {
 	case htModeOff:
-		// Determine if idle or off based on temperature setpoints
-		if bodyInfo.LoTemp <= bodyInfo.Temp && bodyInfo.Temp <= bodyInfo.HiTemp {
-			return thermalStatusIdle // Idle (in neutral zone)
-		}
-		return thermalStatusOff // Off (outside setpoints but not called)
+		return thermalStatusIdle // Idle (heater assigned but not demanded)
 	case htModeHeating:
 		return thermalStatusHeating // Heating (traditional gas heater)
 	case htModeHeatPumpHeating:

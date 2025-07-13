@@ -146,8 +146,25 @@ circuit_status{circuit="FTR01",name="Spa Heat",type="GENERIC"} 0
 ```
 
 ### Thermal Equipment Metrics
+
+**thermal_status Values - Pentameter's Interpretation Layer:**
+
+**Derived from IntelliCenter Data:**
+- **0 (off)**: Based on HTSRC="00000" (no heater assigned)
+- **1 (heating)**: Based on HTMODE=1 or HTMODE=4 (active heating demand)
+
+**Pentameter's Logical Inference:**
+- **2 (idle)**: Pentameter's interpretation of HTMODE=0 + HTSRC≠"00000" (heater assigned but not demanded)
+- **3 (cooling)**: Pentameter's interpretation of HTMODE=9 (heat pump cooling mode)
+
+**IntelliCenter Raw Data:**
+- **HTMODE**: 0, 1, 4, 9 (heating/cooling demand states)
+- **HTSRC**: "00000" or heater ID (assignment status)
+
+The thermal_status metric translates IntelliCenter's raw operational data into human-friendly states. The "idle" and "cooling" concepts are pentameter's abstractions - IntelliCenter itself only provides demand and assignment status.
+
 ```prometheus
-# Thermal equipment status (0=off, 1=heating, 2=idle, 3=cooling)
+# Thermal equipment operational status (see interpretation above)
 thermal_status{heater="H0002",name="Spa Heater",subtyp="GENERIC"} 2
 
 # Temperature setpoints (Fahrenheit)
