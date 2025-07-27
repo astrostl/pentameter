@@ -69,7 +69,7 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
 - **Build:** Makefile with Docker integration
 - **Deployment:** Docker Compose with restart policies
 
-## Quick Start
+## Installation
 
 ```bash
 git clone https://github.com/astrostl/pentameter.git
@@ -83,8 +83,6 @@ Then visit:
 - **Grafana Dashboard**: http://localhost:3000 
 - **Metrics Endpoint**: http://localhost:8080/metrics
 - **Prometheus**: http://localhost:9090
-
-## Installation
 
 ## Configuration
 
