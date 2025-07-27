@@ -309,6 +309,32 @@ The stack uses namespaced container names to prevent conflicts:
 
 This prevents conflicts with existing monitoring containers and clearly identifies pentameter stack components.
 
+## README Quick Start Guidelines
+
+**CRITICAL: README Quick Start Must Include All Required Files**
+
+The Quick Start section should always use `git clone` to ensure users get all necessary configuration files:
+- `prometheus.yml` - Prometheus scraping configuration
+- `grafana/` directory - Dashboard and datasource configurations  
+- `.env.example` - Environment variable template
+- `docker-compose.yml` - Service orchestration
+
+**Never use `curl` to download individual files** - this breaks the setup because users miss required config files.
+
+**Correct Quick Start Pattern:**
+```bash
+git clone https://github.com/astrostl/pentameter.git
+cd pentameter
+cp .env.example .env
+# Edit .env and set your PENTAMETER_IC_IP
+docker compose up -d
+```
+
+**Key Points:**
+- Use `cp .env.example .env` (not `echo`) - the example file exists for this purpose
+- Emphasize that published Docker images are used (no build time required)
+- Keep it simple - clone, configure, run
+
 ### IntelliCenter Connection
 
 The IntelliCenter IP address is stored in `.env` as `PENTAMETER_IC_IP`. The WebSocket port is always 6680. Always source this for commands requiring the IntelliCenter IP:
