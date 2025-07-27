@@ -326,7 +326,6 @@ compose-logs-once:
 
 # Docker publishing targets
 docker-tag:
-	$(DOCKER_CMD) tag pentameter:latest astrostl/pentameter:latest
 	$(DOCKER_CMD) tag pentameter:latest astrostl/pentameter:$(VERSION)
 
 # Build and push multi-platform images (default behavior)
