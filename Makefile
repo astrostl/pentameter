@@ -330,8 +330,10 @@ docker-tag:
 	docker tag pentameter:latest astrostl/pentameter:$(VERSION)
 
 docker-push: docker-tag
-	docker push astrostl/pentameter:latest
-	docker push astrostl/pentameter:$(VERSION)
+	@echo "🚀 Setting up multi-platform builder..."
+	docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
+	@echo "🏗️  Building and pushing multi-platform images..."
+	docker buildx build --platform linux/amd64,linux/arm64 -t astrostl/pentameter:latest -t astrostl/pentameter:$(VERSION) --push .
 
 docker-release: docker-build docker-push
 	@echo "Released astrostl/pentameter:$(VERSION) and astrostl/pentameter:latest"
@@ -402,8 +404,8 @@ help:
 	@echo ""
 	@echo "Publishing:"
 	@echo "  docker-tag   - Tag images for DockerHub publishing"
-	@echo "  docker-push  - Push tagged images to DockerHub"
-	@echo "  docker-release - Build and push images to DockerHub"
+	@echo "  docker-push  - Push multi-platform images (linux/amd64,linux/arm64) to DockerHub"
+	@echo "  docker-release - Build and push multi-platform images to DockerHub"
 	@echo "  release      - Full release workflow (quality-strict + docker-release)"
 	@echo ""
 	@echo "  help         - Show this help"
