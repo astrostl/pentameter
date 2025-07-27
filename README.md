@@ -71,31 +71,19 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
 
 ## Quick Start
 
-### Option 1: Published Docker Images (Recommended)
-
 ```bash
-# Create directory and config
-mkdir pentameter && cd pentameter
-
-# Download docker-compose.yml
-curl -o docker-compose.yml https://raw.githubusercontent.com/astrostl/pentameter/master/docker-compose.yml
-
-# Create .env file with your IntelliCenter IP
-echo "PENTAMETER_IC_IP=192.168.192.168" > .env
-
-# Start the stack
-docker compose up -d
-```
-
-### Option 2: Build from Source
-
-```bash
+# Clone the repository (includes all config files)
 git clone https://github.com/astrostl/pentameter.git
 cd pentameter
-cp .env.example .env
-# Edit .env and set your PENTAMETER_IC_IP
+
+# Configure your IntelliCenter IP
+echo "PENTAMETER_IC_IP=192.168.192.168" > .env
+
+# Start the complete monitoring stack
 docker compose up -d
 ```
+
+This uses the published Docker images from DockerHub, so no build time is required.
 
 Then visit:
 - **Grafana Dashboard**: http://localhost:3000 
