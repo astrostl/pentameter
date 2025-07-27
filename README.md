@@ -77,7 +77,8 @@ git clone https://github.com/astrostl/pentameter.git
 cd pentameter
 
 # Configure your IntelliCenter IP
-echo "PENTAMETER_IC_IP=192.168.192.168" > .env
+cp .env.example .env
+# Edit .env and set your PENTAMETER_IC_IP
 
 # Start the complete monitoring stack
 docker compose up -d
