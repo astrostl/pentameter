@@ -782,7 +782,7 @@ func (pm *PoolMonitor) getThermalStatus() error {
 			// Remove low setpoint metric when not referenced
 			thermalLowSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
 		}
-		
+
 		// Only show coolpoint if realistic temperature (< 100°F) and relevant state
 		if isReferenced && bodyInfo.HiTemp < 100 && (heaterStatusValue == 3 || heaterStatusValue == 2) { // Cooling or Idle with realistic setpoint
 			thermalHighSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.HiTemp)
