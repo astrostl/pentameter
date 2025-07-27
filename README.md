@@ -86,10 +86,13 @@ docker compose up -d
 
 This uses the published Docker images from DockerHub, so no build time is required.
 
-Then visit:
-- **Grafana Dashboard**: http://HOSTNAME:3000/d/pentameter/ 
-- **Metrics Endpoint**: http://HOSTNAME:8080/metrics
-- **Prometheus**: http://HOSTNAME:9090
+## Endpoints
+
+- **Metrics**: `http://HOSTNAME:8080/metrics` - Prometheus metrics
+- **Health**: `http://HOSTNAME:8080/health` - Health check
+- **Prometheus**: `http://HOSTNAME:9090` - Prometheus web interface
+- **Grafana**: `http://HOSTNAME:3000/d/pentameter/` - Grafana dashboards (no login required)
+- **Kiosk Mode**: `http://HOSTNAME:3000/d/pentameter/?kiosk` - Clean dashboard display
 
 ## Configuration
 
@@ -124,14 +127,6 @@ go run main.go
 export PENTAMETER_IC_IP=192.168.192.168
 go run main.go --http-port 9090
 ```
-
-## Endpoints
-
-- **Metrics**: `http://HOSTNAME:8080/metrics` - Prometheus metrics
-- **Health**: `http://HOSTNAME:8080/health` - Health check
-- **Prometheus**: `http://HOSTNAME:9090` - Prometheus web interface
-- **Grafana**: `http://HOSTNAME:3000/d/pentameter/` - Grafana dashboards (no login required)
-- **Kiosk Mode**: `http://HOSTNAME:3000/d/pentameter/?kiosk` - Clean dashboard display
 
 ## Metrics Reference
 
