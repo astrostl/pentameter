@@ -19,7 +19,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-release release
+.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
 
 # Default target
 all: build
@@ -326,14 +326,44 @@ compose-logs-once:
 
 # Docker publishing targets
 docker-tag:
-	docker tag pentameter:latest astrostl/pentameter:latest
-	docker tag pentameter:latest astrostl/pentameter:$(VERSION)
+	$(DOCKER_CMD) tag pentameter:latest astrostl/pentameter:latest
+	$(DOCKER_CMD) tag pentameter:latest astrostl/pentameter:$(VERSION)
 
+# Build and push multi-platform images (default behavior)
 docker-push: docker-tag
-	@echo "🚀 Setting up multi-platform builder..."
-	docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
-	@echo "🏗️  Building and pushing multi-platform images..."
-	docker buildx build --platform linux/amd64,linux/arm64 -t astrostl/pentameter:latest -t astrostl/pentameter:$(VERSION) --push .
+	@echo "🚀 Building and pushing AMD64 image..."
+	$(DOCKER_CMD) build --platform linux/amd64 -t astrostl/pentameter:latest-amd64 -t astrostl/pentameter:$(VERSION)-amd64 .
+	$(DOCKER_CMD) push astrostl/pentameter:latest-amd64
+	$(DOCKER_CMD) push astrostl/pentameter:$(VERSION)-amd64
+	@echo "🚀 Building and pushing ARM64 image..."
+	$(DOCKER_CMD) build --platform linux/arm64 -t astrostl/pentameter:latest-arm64 -t astrostl/pentameter:$(VERSION)-arm64 .
+	$(DOCKER_CMD) push astrostl/pentameter:latest-arm64
+	$(DOCKER_CMD) push astrostl/pentameter:$(VERSION)-arm64
+	@echo "🏗️  Creating multi-platform manifests..."
+	$(MAKE) docker-manifest
+
+# Single-platform push (for testing/debugging)
+docker-push-single: docker-tag
+	$(DOCKER_CMD) push astrostl/pentameter:latest
+	$(DOCKER_CMD) push astrostl/pentameter:$(VERSION)
+
+# Multi-platform manifest creation using manifest-tool
+docker-manifest:
+	@echo "🚀 Installing manifest-tool if needed..."
+	@command -v manifest-tool >/dev/null 2>&1 || { \
+		echo "Installing manifest-tool..."; \
+		go install github.com/estesp/manifest-tool/v2/cmd/manifest-tool@latest; \
+	}
+	@echo "🏗️  Creating multi-platform manifest for latest..."
+	@export PATH=$$PATH:$$(go env GOPATH)/bin && manifest-tool push from-args \
+		--platforms linux/amd64,linux/arm64 \
+		--template astrostl/pentameter:latest-ARCHVARIANT \
+		--target astrostl/pentameter:latest
+	@echo "🏗️  Creating multi-platform manifest for $(VERSION)..."
+	@export PATH=$$PATH:$$(go env GOPATH)/bin && manifest-tool push from-args \
+		--platforms linux/amd64,linux/arm64 \
+		--template astrostl/pentameter:$(VERSION)-ARCHVARIANT \
+		--target astrostl/pentameter:$(VERSION)
 
 docker-release: docker-build docker-push
 	@echo "Released astrostl/pentameter:$(VERSION) and astrostl/pentameter:latest"
@@ -404,7 +434,9 @@ help:
 	@echo ""
 	@echo "Publishing:"
 	@echo "  docker-tag   - Tag images for DockerHub publishing"
-	@echo "  docker-push  - Push multi-platform images (linux/amd64,linux/arm64) to DockerHub"
+	@echo "  docker-push  - Build and push multi-platform images (linux/amd64,linux/arm64) - DEFAULT"
+	@echo "  docker-push-single - Push single-platform images only (for testing)"
+	@echo "  docker-manifest - Create multi-platform manifests using manifest-tool"
 	@echo "  docker-release - Build and push multi-platform images to DockerHub"
 	@echo "  release      - Full release workflow (quality-strict + docker-release)"
 	@echo ""

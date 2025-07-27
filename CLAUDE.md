@@ -62,15 +62,29 @@ make release
 - Runs `quality-strict` checks (must pass)
 - Builds Docker image with `docker-build` (nuclear rebuild)
 - Tags image as both `:latest` and `:v1.0.0`
-- Pushes both tags to DockerHub (`astrostl/pentameter`)
+- Builds and pushes multi-platform images (linux/amd64, linux/arm64) to DockerHub
+- Creates multi-platform manifests using manifest-tool
 
 **Why this is critical:** Users expect Docker images to be available immediately after GitHub releases. The docker-compose.yml references `astrostl/pentameter:latest` so new versions must be published for users to get updates.
 
 **Individual targets available:**
 - `make docker-tag` - Tag images for publishing
-- `make docker-push` - Push to DockerHub 
-- `make docker-release` - Build + push (without quality checks)
-- `make release` - Full workflow (quality + build + push)
+- `make docker-push` - Build and push multi-platform images (linux/amd64,linux/arm64) - DEFAULT
+- `make docker-push-single` - Push single-platform images only (for testing)
+- `make docker-manifest` - Create multi-platform manifests using manifest-tool
+- `make docker-release` - Build + push multi-platform images (without quality checks)
+- `make release` - Full workflow (quality + build + multi-platform push)
+
+**Multi-Platform Publishing (Automatic):**
+
+All DockerHub releases are now multi-platform by default. The standard workflow automatically builds for both AMD64 and ARM64:
+
+1. Builds separate architecture-specific images (`:latest-amd64`, `:latest-arm64`) 
+2. Pushes both images to DockerHub
+3. Uses `manifest-tool` to create multi-platform manifests that automatically select the correct image per platform
+4. Works with both `docker` and `nerdctl` (unlike Docker buildx)
+
+**Why manifest-tool:** Docker buildx requires Docker specifically and doesn't work with nerdctl. The manifest-tool approach builds individual platform images and creates manifests, working with any container runtime.
 
 ## Docker Development - CRITICAL SECTION
 
