@@ -111,10 +111,10 @@ When debugging or making ANY changes to pentameter code, ALWAYS use the Makefile
 make docker-build
 
 # This automatically:
-# - Stops pentameter
+# - Stops pentameter-app container
 # - Prunes Docker system 
 # - Rebuilds with --no-cache
-# - Starts pentameter
+# - Starts pentameter-app container
 # - Verifies changes took effect
 ```
 
@@ -155,6 +155,11 @@ docker build                      # ❌ Manual commands bypass nuclear approach
 # Always verify after rebuild (automatic with make docker-build):
 curl -s http://localhost:8080/metrics | grep "circuit_status.*THERMAL"
 make compose-logs-once | grep "Updated.*status"
+
+# Check specific container logs:
+docker logs pentameter-app
+docker logs pentameter-prometheus  
+docker logs pentameter-grafana
 ```
 
 **Remember: When code changes don't appear to work, it's usually Docker cache, not your code!**
@@ -206,6 +211,15 @@ curl -s http://localhost:8080/metrics    # Check pentameter service metrics
 curl -s http://localhost:9090/metrics    # Check Prometheus metrics
 curl -s http://localhost:9090/api/v1/targets  # Check scrape target status
 ```
+
+### Container Names
+
+The stack uses namespaced container names to prevent conflicts:
+- `pentameter-app` - Main pentameter application (port 8080)
+- `pentameter-prometheus` - Prometheus metrics storage (port 9090)
+- `pentameter-grafana` - Grafana dashboard interface (port 3000)
+
+This prevents conflicts with existing monitoring containers and clearly identifies pentameter stack components.
 
 ### IntelliCenter Connection
 
