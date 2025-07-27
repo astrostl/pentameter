@@ -1,5 +1,5 @@
 services:
-  pentameter:
+  pentameter-app:
     image: astrostl/pentameter:latest
     container_name: pentameter-app
     restart: unless-stopped
@@ -20,7 +20,7 @@ services:
     networks:
       - pentameter-net
 
-  prometheus:
+  pentameter-prometheus:
     image: prom/prometheus:latest
     container_name: pentameter-prometheus
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
     networks:
       - pentameter-net
 
-  grafana:
+  pentameter-grafana:
     image: grafana/grafana:latest
     container_name: pentameter-grafana
     restart: unless-stopped
