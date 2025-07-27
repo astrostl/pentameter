@@ -1,7 +1,6 @@
 services:
   pentameter:
-    build: .
-    image: pentameter:latest
+    image: astrostl/pentameter:latest
     container_name: pentameter
     restart: unless-stopped
     ports:
