@@ -84,6 +84,14 @@ All DockerHub releases are now multi-platform by default. The standard workflow 
 3. Uses `manifest-tool` to create multi-platform manifests that automatically select the correct image per platform
 4. Works with both `docker` and `nerdctl` (unlike Docker buildx)
 
+**Final DockerHub Layout:**
+- `astrostl/pentameter:latest` - Multi-platform manifest (users should use this)
+- `astrostl/pentameter:latest-amd64` - Intel/AMD64 specific image
+- `astrostl/pentameter:latest-arm64` - Apple Silicon/ARM64 specific image
+- Version-specific tags for both architectures and manifests
+
+**Troubleshooting:** If `manifest-tool` fails during `make docker-push`, run `make docker-manifest` separately to create the multi-platform manifests. The individual architecture images will work independently, but users will need to specify the architecture manually without the manifest.
+
 **Why manifest-tool:** Docker buildx requires Docker specifically and doesn't work with nerdctl. The manifest-tool approach builds individual platform images and creates manifests, working with any container runtime.
 
 ## Docker Development - CRITICAL SECTION

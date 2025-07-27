@@ -4,7 +4,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: http://pentameter-prometheus:9090
     uid: prometheus
     isDefault: true
     editable: true
