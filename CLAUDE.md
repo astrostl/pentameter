@@ -43,6 +43,35 @@ make quality      # Run all quality checks (warnings for lint/cyclo issues)
 make quality-strict # Run all quality checks with strict enforcement
 ```
 
+### Release Process - CRITICAL
+
+**⚠️ ALWAYS PUBLISH TO DOCKERHUB AFTER VERSION UPDATES ⚠️**
+
+When creating new releases on GitHub, ALWAYS follow up with DockerHub publishing:
+
+```bash
+# After creating git tag and pushing to GitHub:
+git tag v1.0.0
+git push origin v1.0.0
+
+# MANDATORY: Publish to DockerHub using Makefile
+make release
+```
+
+**What `make release` does:**
+- Runs `quality-strict` checks (must pass)
+- Builds Docker image with `docker-build` (nuclear rebuild)
+- Tags image as both `:latest` and `:v1.0.0`
+- Pushes both tags to DockerHub (`astrostl/pentameter`)
+
+**Why this is critical:** Users expect Docker images to be available immediately after GitHub releases. The docker-compose.yml references `astrostl/pentameter:latest` so new versions must be published for users to get updates.
+
+**Individual targets available:**
+- `make docker-tag` - Tag images for publishing
+- `make docker-push` - Push to DockerHub 
+- `make docker-release` - Build + push (without quality checks)
+- `make release` - Full workflow (quality + build + push)
+
 ## Docker Development - CRITICAL SECTION
 
 **⚠️ DOCKER BUILD CACHING IS SEVERELY PROBLEMATIC ⚠️** 

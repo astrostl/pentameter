@@ -5,6 +5,8 @@
 BINARY_NAME=pentameter
 DOCKER_IMAGE=pentameter
 DOCKER_TAG=latest
+VERSION ?= $(shell git describe --tags --always --dirty)
+LATEST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
 
 # Auto-detect docker command - can be overridden with: make DOCKER_CMD=docker <target>
 DOCKER_CMD ?= $(shell command -v nerdctl >/dev/null 2>&1 && echo nerdctl || echo docker)
@@ -17,7 +19,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once
+.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-release release
 
 # Default target
 all: build
@@ -322,6 +324,25 @@ compose-logs:
 compose-logs-once:
 	@$(DOCKER_CMD) compose logs || $(DOCKER_CMD) logs $(BINARY_NAME)
 
+# Docker publishing targets
+docker-tag:
+	docker tag pentameter:latest astrostl/pentameter:latest
+	docker tag pentameter:latest astrostl/pentameter:$(VERSION)
+
+docker-push: docker-tag
+	docker push astrostl/pentameter:latest
+	docker push astrostl/pentameter:$(VERSION)
+
+docker-release: docker-build docker-push
+	@echo "Released astrostl/pentameter:$(VERSION) and astrostl/pentameter:latest"
+
+# Release workflow
+release: quality-strict docker-release
+	@echo "Release $(VERSION) complete"
+	@echo "Docker images:"
+	@echo "  astrostl/pentameter:latest"
+	@echo "  astrostl/pentameter:$(VERSION)"
+
 # Show help
 help:
 	@echo "Available targets:"
@@ -378,5 +399,11 @@ help:
 	@echo "  compose-down - Stop docker compose (fallback to direct docker)"
 	@echo "  compose-logs - View docker compose logs with tail (fallback to direct docker)"
 	@echo "  compose-logs-once - View docker compose logs once (fallback to direct docker)"
+	@echo ""
+	@echo "Publishing:"
+	@echo "  docker-tag   - Tag images for DockerHub publishing"
+	@echo "  docker-push  - Push tagged images to DockerHub"
+	@echo "  docker-release - Build and push images to DockerHub"
+	@echo "  release      - Full release workflow (quality-strict + docker-release)"
 	@echo ""
 	@echo "  help         - Show this help"
