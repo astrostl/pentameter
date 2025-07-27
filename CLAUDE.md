@@ -222,6 +222,10 @@ This project uses semantic versioning with git tags. The Makefile automatically 
 
 ### Release Workflow
 
+**⚠️ CRITICAL: NEVER CREATE RELEASES WITHOUT EXPLICIT USER APPROVAL ⚠️**
+
+All release creation (git tags, version bumps, DockerHub publishing) requires explicit user direction. Never create releases proactively or as troubleshooting attempts.
+
 #### 1. Prepare Release
 ```bash
 # Update documentation
@@ -235,9 +239,9 @@ git commit -m "Update documentation for v0.X.X release"
 git push
 ```
 
-#### 2. Create Git Tag
+#### 2. Create Git Tag (ONLY WITH USER APPROVAL)
 ```bash
-# Create and push version tag
+# Create and push version tag - ONLY when user explicitly requests it
 git tag v0.X.X
 git push origin v0.X.X
 ```
