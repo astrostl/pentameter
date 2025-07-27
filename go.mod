@@ -1,4 +1,4 @@
-module pentameter
+module github.com/astrostl/pentameter
 
 go 1.24.4
 
