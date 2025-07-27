@@ -334,6 +334,7 @@ docker compose up -d
 - Use `cp .env.example .env` (not `echo`) - the example file exists for this purpose
 - Emphasize that published Docker images are used (no build time required)
 - Keep it simple - clone, configure, run
+- Use `HOSTNAME` instead of `localhost` in all user-facing URLs to work in any deployment environment
 
 ### IntelliCenter Connection
 

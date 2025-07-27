@@ -87,9 +87,9 @@ docker compose up -d
 This uses the published Docker images from DockerHub, so no build time is required.
 
 Then visit:
-- **Grafana Dashboard**: http://localhost:3000 
-- **Metrics Endpoint**: http://localhost:8080/metrics
-- **Prometheus**: http://localhost:9090
+- **Grafana Dashboard**: http://HOSTNAME:3000 
+- **Metrics Endpoint**: http://HOSTNAME:8080/metrics
+- **Prometheus**: http://HOSTNAME:9090
 
 ## Configuration
 
@@ -127,11 +127,11 @@ go run main.go --http-port 9090
 
 ## Endpoints
 
-- **Metrics**: `http://localhost:8080/metrics` - Prometheus metrics
-- **Health**: `http://localhost:8080/health` - Health check
-- **Prometheus**: `http://localhost:9090` - Prometheus web interface
-- **Grafana**: `http://localhost:3000` - Grafana dashboards (no login required)
-- **Kiosk Mode**: `http://localhost:3000/d/intellicenter/intellicenter?kiosk` - Clean dashboard display
+- **Metrics**: `http://HOSTNAME:8080/metrics` - Prometheus metrics
+- **Health**: `http://HOSTNAME:8080/health` - Health check
+- **Prometheus**: `http://HOSTNAME:9090` - Prometheus web interface
+- **Grafana**: `http://HOSTNAME:3000` - Grafana dashboards (no login required)
+- **Kiosk Mode**: `http://HOSTNAME:3000/d/intellicenter/intellicenter?kiosk` - Clean dashboard display
 
 ## Metrics Reference
 
@@ -307,7 +307,7 @@ docker-compose restart
 This starts the complete monitoring stack:
 - **Pentameter**: Pool data collection service
 - **Prometheus**: Metrics storage and querying
-- **Grafana**: Pre-configured dashboard at http://localhost:3000
+- **Grafana**: Pre-configured dashboard at http://HOSTNAME:3000
 
 ### Configuration via Environment Variables
 The `docker-compose.yml` uses environment variables that you can override:
@@ -383,8 +383,8 @@ intellicenter_last_refresh_timestamp_seconds
 - **Real-time Updates**: 30-second refresh with 6-hour default range
 
 ### Display Options
-- **Standard View**: Full dashboard at `http://localhost:3000`
-- **Kiosk Mode**: Clean display at `http://localhost:3000/d/intellicenter/intellicenter?kiosk`
+- **Standard View**: Full dashboard at `http://HOSTNAME:3000`
+- **Kiosk Mode**: Clean display at `http://HOSTNAME:3000/d/intellicenter/intellicenter?kiosk`
 - **Recommended Dashboard**: `SERVER:PORT/d/intellicenter/intellicenter?kiosk=&autofitpanels=true`
 - **Mobile Friendly**: Responsive design for all screen sizes
 
