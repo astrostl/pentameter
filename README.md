@@ -131,7 +131,7 @@ go run main.go --http-port 9090
 - **Health**: `http://HOSTNAME:8080/health` - Health check
 - **Prometheus**: `http://HOSTNAME:9090` - Prometheus web interface
 - **Grafana**: `http://HOSTNAME:3000/d/pentameter/` - Grafana dashboards (no login required)
-- **Kiosk Mode**: `http://HOSTNAME:3000/d/pentameter/pentameter?kiosk` - Clean dashboard display
+- **Kiosk Mode**: `http://HOSTNAME:3000/d/pentameter/?kiosk` - Clean dashboard display
 
 ## Metrics Reference
 
@@ -384,8 +384,8 @@ intellicenter_last_refresh_timestamp_seconds
 
 ### Display Options
 - **Standard View**: Full dashboard at `http://HOSTNAME:3000/d/pentameter/`
-- **Kiosk Mode**: Clean display at `http://HOSTNAME:3000/d/pentameter/pentameter?kiosk`
-- **Recommended Dashboard**: `HOSTNAME:3000/d/pentameter/pentameter?kiosk=&autofitpanels=true`
+- **Kiosk Mode**: Clean display at `http://HOSTNAME:3000/d/pentameter/?kiosk`
+- **Recommended Dashboard**: `http://HOSTNAME:3000/d/pentameter/?kiosk&autofitpanels=true`
 - **Mobile Friendly**: Responsive design for all screen sizes
 
 ### Visual Elements
