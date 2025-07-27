@@ -69,7 +69,25 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
 - **Build:** Makefile with Docker integration
 - **Deployment:** Docker Compose with restart policies
 
-## Installation
+## Quick Start
+
+### Option 1: Published Docker Images (Recommended)
+
+```bash
+# Create directory and config
+mkdir pentameter && cd pentameter
+
+# Download docker-compose.yml
+curl -o docker-compose.yml https://raw.githubusercontent.com/astrostl/pentameter/master/docker-compose.yml
+
+# Create .env file with your IntelliCenter IP
+echo "PENTAMETER_IC_IP=192.168.192.168" > .env
+
+# Start the stack
+docker compose up -d
+```
+
+### Option 2: Build from Source
 
 ```bash
 git clone https://github.com/astrostl/pentameter.git
@@ -93,13 +111,13 @@ All configuration options can be set via command line flags or environment varia
 | `--ic-ip` | `PENTAMETER_IC_IP` | (required) | IntelliCenter IP address |
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
-| `--interval` | `PENTAMETER_INTERVAL` | `300` | Temperature polling interval (seconds) |
+| `--interval` | `PENTAMETER_INTERVAL` | `60` | Temperature polling interval (seconds) |
 
 ## Usage
 
 ### Command Line Flags
 ```bash
-go run main.go --ic-ip 192.168.192.168 --ic-port 6680 --http-port 8080 --interval 300
+go run main.go --ic-ip 192.168.192.168 --ic-port 6680 --http-port 8080 --interval 60
 ```
 
 ### Environment Variables
@@ -107,7 +125,7 @@ go run main.go --ic-ip 192.168.192.168 --ic-port 6680 --http-port 8080 --interva
 export PENTAMETER_IC_IP=192.168.192.168
 export PENTAMETER_IC_PORT=6680
 export PENTAMETER_HTTP_PORT=8080
-export PENTAMETER_INTERVAL=300
+export PENTAMETER_INTERVAL=60
 go run main.go
 ```
 
@@ -310,7 +328,7 @@ environment:
   - PENTAMETER_IC_IP=192.168.192.168
   - PENTAMETER_IC_PORT=6680
   - PENTAMETER_HTTP_PORT=8080
-  - PENTAMETER_INTERVAL=300
+  - PENTAMETER_INTERVAL=60
 ```
 
 ### Manual Docker Build and Run
@@ -335,7 +353,7 @@ docker run -d \
 ## Prometheus Integration
 
 ### Configuration
-- **Scrape Interval**: 300 seconds (matches polling interval)
+- **Scrape Interval**: 60 seconds (matches polling interval)
 - **Data Retention**: 30 days for temperature and connection metrics
 - **Network**: Docker bridge communication via pentameter-net
 - **Format**: Standard Prometheus metrics with label-based time series
@@ -346,8 +364,8 @@ Add to your Prometheus `prometheus.yml`:
 scrape_configs:
   - job_name: 'pentameter'
     static_configs:
-      - targets: ['localhost:8080']
-    scrape_interval: 30s
+      - targets: ['pentameter-app:8080']
+    scrape_interval: 60s
 ```
 
 ### Common Queries

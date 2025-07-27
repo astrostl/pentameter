@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-07-27
+
+### Added
+- Multi-platform Docker image support (AMD64 + ARM64) using manifest-tool
+- DockerHub publishing workflow with automated multi-arch builds
+- Container namespace isolation with pentameter- prefix for all services
+- Git tag-based versioning system for releases
+- Comprehensive release workflow in Makefile (`make release`)
+- Enhanced CLAUDE.md documentation with multi-platform publishing guide
+
+### Changed
+- **BREAKING**: Service names updated to use pentameter- prefix (pentameter-app, pentameter-prometheus, pentameter-grafana)
+- **BREAKING**: Container names updated to match service names consistently
+- Updated docker-compose.yml to use published DockerHub image instead of local build
+- Updated Prometheus and Grafana configurations for new container names
+- Fixed Go module path from "pentameter" to "github.com/astrostl/pentameter" for tooling compatibility
+- Enhanced Makefile with multi-platform publishing targets using manifest-tool instead of Docker buildx
+
+### Infrastructure
+- Established DockerHub repository (astrostl/pentameter) with automated publishing
+- Implemented nuclear Docker rebuild strategy to prevent cache issues during development
+- Added manifest-tool integration for reliable multi-platform image creation
+- Updated all service configurations to support new container naming convention
+
 ## [0.1.1] - 2025-07-08
 
 ### Added

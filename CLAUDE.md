@@ -212,6 +212,90 @@ curl -s http://localhost:9090/metrics    # Check Prometheus metrics
 curl -s http://localhost:9090/api/v1/targets  # Check scrape target status
 ```
 
+## Release Process
+
+### Version Management
+
+This project uses semantic versioning with git tags. The Makefile automatically determines versions using:
+- `VERSION ?= $(shell git describe --tags --always --dirty)`
+- `LATEST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")`
+
+### Release Workflow
+
+#### 1. Prepare Release
+```bash
+# Update documentation
+# - CHANGELOG.md: Add new version section with changes
+# - README.md: Update installation instructions and configuration
+# - CLAUDE.md: Update any process documentation
+
+# Commit documentation updates
+git add CHANGELOG.md README.md CLAUDE.md
+git commit -m "Update documentation for v0.X.X release"
+git push
+```
+
+#### 2. Create Git Tag
+```bash
+# Create and push version tag
+git tag v0.X.X
+git push origin v0.X.X
+```
+
+#### 3. Build and Publish to DockerHub
+```bash
+# Full release workflow (quality checks + multi-platform Docker publishing)
+make release
+
+# This automatically:
+# - Runs quality-strict (all quality checks must pass)
+# - Builds multi-platform images (AMD64 + ARM64)
+# - Pushes to DockerHub with version tag and latest
+# - Creates multi-platform manifests using manifest-tool
+```
+
+### Multi-Platform Docker Publishing
+
+The project uses manifest-tool for reliable multi-platform image creation:
+
+#### Automatic Multi-Platform (Default)
+```bash
+make docker-push    # Builds AMD64 + ARM64, creates manifests
+make release        # Full workflow including quality checks
+```
+
+#### Manual Steps (if needed)
+```bash
+# 1. Build and push architecture-specific images
+make docker-tag
+docker build --platform linux/amd64 -t astrostl/pentameter:v0.X.X-amd64 .
+docker build --platform linux/arm64 -t astrostl/pentameter:v0.X.X-arm64 .
+docker push astrostl/pentameter:v0.X.X-amd64
+docker push astrostl/pentameter:v0.X.X-arm64
+
+# 2. Create multi-platform manifests
+make docker-manifest
+```
+
+#### Single Platform (Testing Only)
+```bash
+make docker-push-single    # Push current platform only
+```
+
+### Release Verification
+
+After releasing:
+```bash
+# Verify multi-platform manifest exists
+docker manifest inspect astrostl/pentameter:v0.X.X
+
+# Test published image works
+docker run --rm astrostl/pentameter:v0.X.X --help
+
+# Verify Go Report Card updates (may take time)
+curl -s https://goreportcard.com/report/github.com/astrostl/pentameter
+```
+
 ### Container Names
 
 The stack uses namespaced container names to prevent conflicts:
