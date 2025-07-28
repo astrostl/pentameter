@@ -107,6 +107,8 @@ Returns heater setup and communication settings.
 
 The `GetParamList` command retrieves current operational data for monitoring.
 
+**Note on Parameter Lists:** The examples below show both basic parameter sets for understanding key concepts and comprehensive parameter sets used in production implementations. Production systems typically request additional parameters for complete monitoring and correlation.
+
 ### Request Format
 ```json
 {
@@ -125,9 +127,19 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "water-temp-001",
   "command": "GetParamList",
   "condition": "OBJTYP=BODY",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "TEMP", "STATUS"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "TEMP", "STATUS", "SUBTYP", "HTMODE", "HTSRC", "LOTMP", "HITMP"]}]
 }
 ```
+
+**Response includes:**
+- **SNAME**: Display name (Pool, Spa)
+- **TEMP**: Current water temperature (°F)
+- **STATUS**: Body status
+- **SUBTYP**: Body type (POOL, SPA)
+- **HTMODE**: Heating demand status (see Heater Status section)
+- **HTSRC**: Assigned heater object ID
+- **LOTMP**: Low temperature setpoint (heating threshold)
+- **HITMP**: High temperature setpoint (cooling threshold)
 
 **Air Temperature:**
 ```json
@@ -135,7 +147,7 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "air-temp-001", 
   "command": "GetParamList",
   "condition": "",
-  "objectList": [{"objnam": "_A135", "keys": ["SNAME", "PROBE", "STATUS"]}]
+  "objectList": [{"objnam": "_A135", "keys": ["SNAME", "PROBE", "STATUS", "SUBTYP"]}]
 }
 ```
 
@@ -157,7 +169,7 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "pump-001",
   "command": "GetParamList", 
   "condition": "OBJTYP=PUMP",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "RPM", "GPM", "WATTS"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "RPM", "GPM", "WATTS", "SPEED"]}]
 }
 ```
 
@@ -175,7 +187,7 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "circuit-001",
   "command": "GetParamList",
   "condition": "OBJTYP=CIRCUIT", 
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "SUBTYP"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "SUBTYP", "OBJTYP"]}]
 }
 ```
 
@@ -275,23 +287,39 @@ This filtering reduces ~35 total circuits to ~9 actual equipment items.
 
 ### Heater Status Monitoring
 
-IntelliCenter tracks heating at multiple levels. For accurate monitoring, use body-level `HTMODE` rather than circuit features.
+IntelliCenter tracks heating at multiple levels. For accurate monitoring, use both body-level `HTMODE` and heater-level status.
 
-**Heater Status Query:**
+**Body-Level Heater Status Query:**
 ```json
 {
   "messageID": "heating-001",
   "command": "GetParamList", 
   "condition": "OBJTYP=BODY",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "HTMODE", "HTSRC", "TEMP"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "HTMODE", "HTSRC", "TEMP", "LOTMP", "HITMP"]}]
+}
+```
+
+**Equipment-Level Heater Status Query:**
+```json
+{
+  "messageID": "heater-equipment-001",
+  "command": "GetParamList", 
+  "condition": "OBJTYP=HEATER",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "SUBTYP", "OBJTYP"]}]
 }
 ```
 
 **HTMODE Values:**
-- **0**: No heating demand (off or setpoint reached)
+- **0**: No heating demand (idle when heater assigned, off when no heater assigned)
 - **1**: Actively calling for heat (traditional heater firing)
 - **4**: Heat pump heating mode (UltraTemp operation)
 - **9**: Heat pump cooling mode (UltraTemp operation)
+
+**Thermal Status Interpretation:**
+- **Off (0)**: HTSRC="00000" (no heater assigned)
+- **Heating (1)**: HTMODE=1 or HTMODE=4 (actively heating)
+- **Idle (2)**: HTMODE=0 with assigned heater (enabled but setpoint satisfied)
+- **Cooling (3)**: HTMODE=9 (heat pump cooling mode)
 
 **Key Parameters:**
 - **HTMODE**: Actual heating demand (most important)
@@ -316,9 +344,13 @@ For reliable on/off/idle detection, use the combination of HTMODE and HTSRC:
 - **HTSRC="00000"** (regardless of HTMODE): No heater assigned, system off
 
 **Detection Logic:**
-1. If **HTSRC="00000"** → System is **OFF**
+1. If **HTSRC="00000"** → System is **OFF** (no heater assigned)
 2. If **HTSRC** points to heater AND **HTMODE≥1** → System is **ACTIVE** (heating/cooling)
-3. If **HTSRC** points to heater AND **HTMODE=0** → System is **IDLE** (enabled but satisfied)
+3. If **HTSRC** points to heater AND **HTMODE=0** → System is **IDLE** (heater assigned but setpoint satisfied)
+
+**Important Distinction - Idle vs Off:**
+- **Off**: Heating system disabled (no heater assigned via HTSRC)
+- **Idle**: Heating system enabled with assigned heater but no current demand (setpoint already reached)
 
 **Critical Notes:**
 - HTSRC="00000" definitively indicates the heating system is OFF (regardless of HTMODE value)

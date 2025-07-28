@@ -571,4 +571,5 @@ intellicenter_last_refresh_timestamp_seconds
 - Implement automated coverage reporting
 - Add performance and connection quality metrics
 - Alert rule templates and notification integrations
+- IntelliCenter auto-discovery via network scanning
 
