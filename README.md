@@ -565,57 +565,12 @@ intellicenter_last_refresh_timestamp_seconds
 
 ## Roadmap
 
-The following improvements are planned for future releases to enhance code quality, maintainability, and testing:
-
-### 🏗️ Code Architecture & Quality
-
-- **main.go Refactoring**
-  - Split the monolithic main.go (~1200+ lines) into focused modules
-  - Create separate packages for WebSocket handling, metrics collection, and health monitoring
-  - Implement dependency injection for better testability
-  - Extract configuration management into dedicated module
-
-- **Structured Logging**
-  - Replace `log.Printf` with structured logging (likely `slog` from Go 1.21+)
-  - Add configurable log levels (debug, info, warn, error)
-  - Include contextual fields (connection state, request IDs, equipment names)
-  - Support JSON output for production deployments
-
-### 🧪 Testing & Quality Assurance
-
-- **Integration Tests**
-  - Add end-to-end tests against real IntelliCenter API responses
-  - Mock WebSocket server tests for connection failure scenarios
-  - Prometheus metrics validation tests
-  - Docker container integration tests
-
-- **Coverage Reporting**
-  - Implement automated test coverage reporting in CI/CD
-  - Target minimum 80% code coverage across all packages
-  - Add coverage badges and reporting in GitHub Actions
-  - Integration with Go Report Card for public visibility
-
-### 📊 Monitoring & Observability
-
-- **Enhanced Metrics**
-  - Add performance metrics (response times, processing duration)
-  - Include WebSocket connection quality metrics
-  - Implement metric cardinality monitoring and alerts
-  - Add business logic metrics (equipment state change frequency)
-
-### 🚀 Future Enhancements
-
-- **Multi-Controller Support**
-  - Support for monitoring multiple IntelliCenter units
-  - Configuration file-based setup for complex deployments
-  - Unified metrics namespace with controller identification
-
-- **Advanced Features**
-  - Historical data export capabilities
-  - Alert rule templates for common pool monitoring scenarios
-  - Integration with popular notification systems (Slack, Discord, email)
-
-### Contributing
-
-These roadmap items represent opportunities for community contribution. See our [contributing guidelines](CONTRIBUTING.md) for how to get involved in improving pentameter.
+- Refactor monolithic main.go into focused modules 
+- Implement structured logging with configurable levels
+- Add comprehensive integration tests
+- Implement automated coverage reporting
+- Add performance and connection quality metrics
+- Support monitoring multiple IntelliCenter units
+- Historical data export capabilities
+- Alert rule templates and notification integrations
 
