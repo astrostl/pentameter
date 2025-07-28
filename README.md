@@ -78,6 +78,7 @@ Pentameter offers multiple installation methods to suit different deployment pre
 | **Homebrew** | macOS | Single exporter, integrate with existing monitoring | Instant install, pre-built binaries |
 | **Docker Compose** | All platforms | Complete monitoring stack | Grafana dashboards, Prometheus included |
 | **Docker** | All platforms | Container deployment | Lightweight, configurable |
+| **Go Install** | All platforms | Go developers, build from source | Latest source, Go toolchain integration |
 | **Source Build** | All platforms | Development, customization | Full control, latest changes |
 
 ## Quick Start
@@ -112,7 +113,33 @@ Metrics are available at `http://localhost:8080/metrics`
 
 *For complete monitoring with Grafana dashboards, use the Docker Compose option below.*
 
-### Option 2: Docker Compose - Complete Monitoring Stack
+### Option 2: Go Install - Build from Source
+
+**Recommended for Go developers who want to build from source:**
+
+```bash
+# Install latest version
+go install github.com/astrostl/pentameter@latest
+
+# Or install specific version
+go install github.com/astrostl/pentameter@v0.2.2
+
+# Set your IntelliCenter IP address
+export PENTAMETER_IC_IP=192.168.1.100
+
+# Start the exporter
+pentameter
+```
+
+✅ **Latest source** - Always up-to-date with repository  
+✅ **Go toolchain integration** - Uses your existing Go installation  
+✅ **All platforms** - Works wherever Go runs  
+
+**Note**: Version information (`pentameter --version`) will show as "dev" since go install doesn't include build-time version injection.
+
+Metrics are available at `http://localhost:8080/metrics`
+
+### Option 3: Docker Compose - Complete Monitoring Stack
 
 **Recommended for full monitoring setup with Grafana dashboards:**
 
