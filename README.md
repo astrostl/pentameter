@@ -570,7 +570,5 @@ intellicenter_last_refresh_timestamp_seconds
 - Add comprehensive integration tests
 - Implement automated coverage reporting
 - Add performance and connection quality metrics
-- Support monitoring multiple IntelliCenter units
-- Historical data export capabilities
 - Alert rule templates and notification integrations
 
