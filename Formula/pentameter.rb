@@ -6,10 +6,10 @@ class Pentameter < Formula
 
   if OS.mac? && Hardware::CPU.arm?
     url "https://github.com/astrostl/pentameter/releases/download/v0.2.1/pentameter-v0.2.1-darwin-arm64.tar.gz"
-    sha256 "d8d92c820b3ece4104a8d513f0ed1b6c4865bf6c3dcda559077c96a86b5f1c0f"
+    sha256 "79b10d07eb36d1f0fc4f5bc96d62d8609967be66850683985744aee339aa2af8"
   elsif OS.mac? && Hardware::CPU.intel?
     url "https://github.com/astrostl/pentameter/releases/download/v0.2.1/pentameter-v0.2.1-darwin-amd64.tar.gz"
-    sha256 "ef39a15546961c6e28b9f800c9dec0a4fe992376f1f0e1f90875896dc9179b18"
+    sha256 "5ff317e84b427fdf8c702bdb2ad7ea99a75e5ace62dc4f18ea9c67af4f7ac969"
   else
     odie "Pentameter is only supported on macOS via Homebrew. Use Docker or build from source for Linux deployment."
   end
