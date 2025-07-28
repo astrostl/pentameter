@@ -572,4 +572,5 @@ intellicenter_last_refresh_timestamp_seconds
 - Add performance and connection quality metrics
 - Alert rule templates and notification integrations
 - IntelliCenter auto-discovery via network scanning
+- Add storage monitoring for Prometheus and Grafana data volumes
 
