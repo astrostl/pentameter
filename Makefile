@@ -26,20 +26,20 @@ all: build
 
 # Build the binary
 build:
-	$(GOBUILD) -o $(BINARY_NAME) -v .
+	$(GOBUILD) -ldflags "-X main.version=$(VERSION)" -o $(BINARY_NAME) -v .
 
 # Build static binary for containers
 build-static:
-	CGO_ENABLED=0 GOOS=linux $(GOBUILD) -a -installsuffix cgo -o $(BINARY_NAME) .
+	CGO_ENABLED=0 GOOS=linux $(GOBUILD) -ldflags "-X main.version=$(VERSION)" -a -installsuffix cgo -o $(BINARY_NAME) .
 
 # Build macOS binaries for Homebrew distribution
 build-macos-binaries:
 	@echo "🍺 Building macOS binaries for Homebrew..."
 	@mkdir -p dist
 	@echo "Building darwin-amd64..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -o dist/$(BINARY_NAME)-darwin-amd64 .
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -ldflags "-X main.version=$(VERSION)" -o dist/$(BINARY_NAME)-darwin-amd64 .
 	@echo "Building darwin-arm64..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -o dist/$(BINARY_NAME)-darwin-arm64 .
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -ldflags "-X main.version=$(VERSION)" -o dist/$(BINARY_NAME)-darwin-arm64 .
 	@echo "✓ macOS binaries built successfully"
 
 # Package macOS binaries into tar.gz archives

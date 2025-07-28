@@ -19,6 +19,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Version information set at build time
+var version = "dev"
+
 // Constants.
 const (
 	nanosecondMod       = 1000000
@@ -747,55 +750,64 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 	// Process heater data and update metrics
 	for _, obj := range resp.ObjectList {
-		name := obj.Params["SNAME"]
-		subtype := obj.Params["SUBTYP"]
-		status := obj.Params["STATUS"]
-
-		if name == "" || subtype == "" {
-			continue
-		}
-
-		var heaterStatusValue int
-		var statusDescription string
-
-		// Check if this heater is referenced by a body
-		bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
-		if isReferenced {
-			// Use body operational data for referenced heaters
-			heaterStatusValue = pm.calculateHeaterStatus(&bodyInfo, subtype)
-			statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)",
-				pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
-		} else {
-			// For non-referenced heaters, determine status by name matching with body heating status
-			heaterStatusValue = pm.calculateHeaterStatusFromName(name, status)
-			statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)",
-				pm.getStatusDescription(heaterStatusValue))
-		}
-
-		// Update Prometheus metric
-		thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
-
-		// Always show heatpoint for referenced heaters
-		if isReferenced {
-			thermalLowSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.LoTemp)
-		} else {
-			// Remove low setpoint metric when not referenced
-			thermalLowSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
-		}
-
-		// Only show coolpoint if realistic temperature (< 100°F) and relevant state
-		if isReferenced && bodyInfo.HiTemp < 100 && (heaterStatusValue == 3 || heaterStatusValue == 2) { // Cooling or Idle with realistic setpoint
-			thermalHighSetpoint.WithLabelValues(obj.ObjName, name, subtype).Set(bodyInfo.HiTemp)
-		} else {
-			// Remove high setpoint metric when >= 100°F, not cooling/idle, or not referenced
-			thermalHighSetpoint.DeleteLabelValues(obj.ObjName, name, subtype)
-		}
-
-		log.Printf("Updated thermal status: %s (%s) = %d [%s]",
-			name, obj.ObjName, heaterStatusValue, statusDescription)
+		pm.processHeaterObject(obj)
 	}
 
 	return nil
+}
+
+func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
+	name := obj.Params["SNAME"]
+	subtype := obj.Params["SUBTYP"]
+	status := obj.Params["STATUS"]
+
+	if name == "" || subtype == "" {
+		return
+	}
+
+	var heaterStatusValue int
+	var statusDescription string
+
+	// Check if this heater is referenced by a body
+	bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
+	if isReferenced {
+		// Use body operational data for referenced heaters
+		heaterStatusValue = pm.calculateHeaterStatus(&bodyInfo, subtype)
+		statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)",
+			pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
+	} else {
+		// For non-referenced heaters, determine status by name matching with body heating status
+		heaterStatusValue = pm.calculateHeaterStatusFromName(name, status)
+		statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)",
+			pm.getStatusDescription(heaterStatusValue))
+	}
+
+	// Update Prometheus metric
+	thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
+
+	// Handle temperature setpoints
+	pm.updateThermalSetpoints(obj.ObjName, name, subtype, isReferenced, bodyInfo, heaterStatusValue)
+
+	log.Printf("Updated thermal status: %s (%s) = %d [%s]",
+		name, obj.ObjName, heaterStatusValue, statusDescription)
+}
+
+func (pm *PoolMonitor) updateThermalSetpoints(objName, name, subtype string, isReferenced bool, bodyInfo BodyHeaterInfo, heaterStatusValue int) {
+	// Always show heatpoint for referenced heaters
+	if isReferenced {
+		thermalLowSetpoint.WithLabelValues(objName, name, subtype).Set(bodyInfo.LoTemp)
+	} else {
+		// Remove low setpoint metric when not referenced
+		thermalLowSetpoint.DeleteLabelValues(objName, name, subtype)
+	}
+
+	// Only show coolpoint if realistic temperature (< 100°F) and relevant state
+	if isReferenced && bodyInfo.HiTemp < 100 && (heaterStatusValue == 3 || heaterStatusValue == 2) { // Cooling or Idle with realistic setpoint
+		thermalHighSetpoint.WithLabelValues(objName, name, subtype).Set(bodyInfo.HiTemp)
+	} else {
+		// Remove high setpoint metric when >= 100°F, not cooling/idle, or not referenced
+		thermalHighSetpoint.DeleteLabelValues(objName, name, subtype)
+	}
 }
 
 func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo *BodyHeaterInfo, _ string) int {
@@ -1128,7 +1140,14 @@ func main() {
 		}
 		return defaultPollInterval
 	}(), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)")
+	showVersion := flag.Bool("version", false, "Show version information")
 	flag.Parse()
+
+	// Handle version flag
+	if *showVersion {
+		fmt.Printf("pentameter %s\n", version)
+		os.Exit(0)
+	}
 
 	// Convert interval seconds to duration
 	pollInterval := time.Duration(*pollIntervalSeconds) * time.Second
