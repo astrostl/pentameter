@@ -45,16 +45,16 @@ make quality-strict # Run all quality checks with strict enforcement
 
 ### Release Process - CRITICAL
 
-**⚠️ ALWAYS PUBLISH TO DOCKERHUB AFTER VERSION UPDATES ⚠️**
+**⚠️ COMPLETE RELEASE WORKFLOW: DOCKERHUB + HOMEBREW ⚠️**
 
-When creating new releases on GitHub, ALWAYS follow up with DockerHub publishing:
+When creating new releases on GitHub, ALWAYS follow the complete publishing workflow:
 
 ```bash
-# After creating git tag and pushing to GitHub:
+# Create git tag and push to GitHub:
 git tag v1.0.0
 git push origin v1.0.0
 
-# MANDATORY: Publish to DockerHub using Makefile
+# MANDATORY: Complete release (Docker + Homebrew + GitHub)
 make release
 ```
 
@@ -64,8 +64,15 @@ make release
 - Tags image as both `:latest` and `:v1.0.0`
 - Builds and pushes multi-platform images (linux/amd64, linux/arm64) to DockerHub
 - Creates multi-platform manifests using manifest-tool
+- **Builds macOS binaries for Homebrew (Intel + Apple Silicon)**
+- **Updates Formula/pentameter.rb with new version and SHA256 checksums**
+- **Generates checksums.txt for GitHub release assets**
 
-**Why this is critical:** Users expect Docker images to be available immediately after GitHub releases. The docker-compose.yml references `astrostl/pentameter:latest` so new versions must be published for users to get updates.
+**Why this is critical:** 
+- Docker users expect images to be available immediately after GitHub releases
+- Homebrew users expect tap formulas to work with published GitHub releases
+- The docker-compose.yml references `astrostl/pentameter:latest` 
+- The Homebrew formula references specific release assets and checksums
 
 **Individual targets available:**
 - `make docker-tag` - Tag images for publishing
@@ -73,7 +80,11 @@ make release
 - `make docker-push-single` - Push single-platform images only (for testing)
 - `make docker-manifest` - Create multi-platform manifests using manifest-tool
 - `make docker-release` - Build + push multi-platform images (without quality checks)
-- `make release` - Full workflow (quality + build + multi-platform push)
+- `make build-macos-binaries` - Build macOS binaries for Homebrew (Intel + Apple Silicon)
+- `make package-macos-binaries` - Package macOS binaries into tar.gz archives
+- `make generate-macos-checksums` - Generate SHA256 checksums for macOS packages
+- `make update-homebrew-formula` - Update Formula/pentameter.rb with new version and checksums
+- `make release` - **Full workflow (quality + Docker + Homebrew + GitHub assets)**
 
 **Multi-Platform Publishing (Automatic):**
 
@@ -93,6 +104,77 @@ All DockerHub releases are now multi-platform by default. The standard workflow 
 **Troubleshooting:** If `manifest-tool` fails during `make docker-push`, run `make docker-manifest` separately to create the multi-platform manifests. The individual architecture images will work independently, but users will need to specify the architecture manually without the manifest.
 
 **Why manifest-tool:** Docker buildx requires Docker specifically and doesn't work with nerdctl. The manifest-tool approach builds individual platform images and creates manifests, working with any container runtime.
+
+## Homebrew Tap Distribution
+
+The project includes a consolidated Homebrew tap in the main repository for easy macOS installation.
+
+### Repository Structure
+
+```
+pentameter/
+├── Formula/
+│   └── pentameter.rb      # Homebrew formula for macOS binaries
+├── dist/                  # Generated during release (macOS binaries + checksums)
+├── docker-compose.yml     # Full monitoring stack
+├── Makefile              # Build automation including Homebrew targets
+└── ...
+```
+
+### Homebrew Formula Management
+
+The `Formula/pentameter.rb` file is automatically maintained by the Makefile:
+
+**During Development:**
+- Formula contains placeholder SHA256 values (`PLACEHOLDER_AMD64_SHA256`, `PLACEHOLDER_ARM64_SHA256`)
+- Points to the current version tag for GitHub release assets
+
+**During Release (`make release`):**
+1. Builds clean macOS binaries for current git tag
+2. Generates real SHA256 checksums 
+3. Updates formula with actual version and checksums
+4. Creates release-ready assets in `dist/` directory
+
+### User Installation
+
+**Tap Installation:**
+```bash
+# Add the tap (one time setup)
+brew tap astrostl/pentameter https://github.com/astrostl/pentameter
+
+# Install pentameter
+brew install pentameter
+```
+
+**Direct Installation:**
+```bash
+# One-line install (automatically adds tap)
+brew install astrostl/pentameter/pentameter
+```
+
+### Post-Release Steps
+
+After running `make release`, you must manually create the GitHub release with the generated assets:
+
+```bash
+# Assets are ready in dist/ directory
+gh release create v1.0.0 \
+  --title "v1.0.0 - Release Title" \
+  --notes "Release notes..." \
+  dist/pentameter-v1.0.0-darwin-amd64.tar.gz \
+  dist/pentameter-v1.0.0-darwin-arm64.tar.gz \
+  dist/checksums.txt
+```
+
+**Critical:** The Homebrew formula references these exact GitHub release assets, so the release must be created with the generated binaries for the formula to work.
+
+### Platform Support
+
+- **macOS (Intel + Apple Silicon)**: Pre-built binaries via Homebrew
+- **Linux**: Docker deployment (docker-compose.yml) or build from source
+- **Windows**: Docker deployment or build from source
+
+The formula provides helpful error messages for non-macOS platforms directing users to Docker or source builds.
 
 ## Docker Development - CRITICAL SECTION
 

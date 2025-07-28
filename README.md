@@ -69,16 +69,26 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
 - **Build:** Makefile with Docker integration
 - **Deployment:** Docker Compose with restart policies
 
+## Installation Options
+
+Pentameter offers multiple installation methods to suit different deployment preferences:
+
+| Method | Platform | Use Case | Features |
+|--------|----------|-----------|----------|
+| **Homebrew** | macOS | Single exporter, integrate with existing monitoring | Instant install, pre-built binaries |
+| **Docker Compose** | All platforms | Complete monitoring stack | Grafana dashboards, Prometheus included |
+| **Docker** | All platforms | Container deployment | Lightweight, configurable |
+| **Source Build** | All platforms | Development, customization | Full control, latest changes |
+
 ## Quick Start
 
-### Option 1: Homebrew (macOS) - Recommended
+### Option 1: Homebrew (macOS) - Instant Installation
+
+**Recommended for macOS users who want just the metrics exporter:**
 
 ```bash
-# Add the tap (one time setup)
-brew tap astrostl/pentameter https://github.com/astrostl/pentameter
-
-# Install pentameter
-brew install pentameter
+# One-line install (automatically adds tap)
+brew install astrostl/pentameter/pentameter
 
 # Set your IntelliCenter IP address
 export PENTAMETER_IC_IP=192.168.1.100
@@ -87,17 +97,24 @@ export PENTAMETER_IC_IP=192.168.1.100
 pentameter
 ```
 
-**Alternative one-line install:**
+**Alternative two-step install:**
 ```bash
-# Direct install (automatically adds tap)
-brew install astrostl/pentameter/pentameter
+# Add the tap (one time setup)
+brew tap astrostl/pentameter https://github.com/astrostl/pentameter
+brew install pentameter
 ```
+
+✅ **Instant installation** - No build time, no dependencies  
+✅ **Pre-built binaries** - Intel and Apple Silicon supported  
+✅ **Automatic updates** - `brew upgrade pentameter`  
 
 Metrics are available at `http://localhost:8080/metrics`
 
-For complete monitoring with Grafana dashboards, use the Docker Compose option below.
+*For complete monitoring with Grafana dashboards, use the Docker Compose option below.*
 
-### Option 2: Docker Compose - Full Stack
+### Option 2: Docker Compose - Complete Monitoring Stack
+
+**Recommended for full monitoring setup with Grafana dashboards:**
 
 ```bash
 # Clone the repository (includes all config files)
@@ -112,7 +129,15 @@ cp .env.example .env
 docker compose up -d
 ```
 
-This uses the published Docker images from DockerHub, so no build time is required.
+✅ **Complete monitoring** - Pentameter + Prometheus + Grafana  
+✅ **Pre-configured dashboards** - Ready-to-use Grafana setup  
+✅ **No build time** - Uses published DockerHub images  
+✅ **All platforms** - Works on macOS, Linux, Windows  
+
+**Access Points:**
+- **Grafana Dashboard**: `http://localhost:3000/d/pentameter/`
+- **Metrics**: `http://localhost:8080/metrics`  
+- **Prometheus**: `http://localhost:9090`
 
 ## Endpoints
 
@@ -339,22 +364,55 @@ Pentameter filters IntelliCenter's ~35 circuits down to ~9 meaningful equipment 
 - **_A-prefixed**: Action commands (All Lights On/Off)
 - **Duplicates**: Multiple entries for same equipment
 
-## Building
+## Building and Development
 
-### Using Makefile (Recommended)
+### Development Tools
+
+The project includes comprehensive build automation via Makefile:
+
 ```bash
-# Build the binary
-make build
+# Development workflow
+make dev          # Build + quality checks (recommended for development)
+make build        # Build binary only
+make quality      # Run all quality checks
 
-# Build Docker image
-make docker-build
+# Release workflow  
+make release      # Complete release (Docker + Homebrew + GitHub assets)
 
-# Run with Docker Compose
-make compose-up
+# Docker development
+make docker-build # Build with aggressive cache clearing (nuclear rebuild)
+make compose-up   # Start full monitoring stack
 
-# View all available targets (now organized by category)
+# Homebrew development
+make build-macos-binaries      # Build macOS binaries (Intel + Apple Silicon)
+make update-homebrew-formula   # Update Formula/pentameter.rb with checksums
+
+# View all available targets (organized by category)
 make help
 ```
+
+### Repository Structure
+
+The project uses a consolidated repository structure:
+
+```
+pentameter/
+├── Formula/
+│   └── pentameter.rb          # Homebrew formula (consolidated tap)
+├── dist/                      # Generated during release (macOS binaries)
+├── grafana/                   # Dashboard and datasource configs
+├── prometheus.yml             # Prometheus scraping configuration
+├── docker-compose.yml         # Complete monitoring stack
+├── Makefile                   # Build automation (Docker + Homebrew)
+├── main.go                    # Core application
+└── README.md
+```
+
+**Key Features:**
+- **Homebrew tap included** - No separate repository needed
+- **Multi-platform releases** - Docker (all platforms) + Homebrew (macOS)
+- **Automated workflows** - Single `make release` command
+- **Development friendly** - Nuclear rebuild options for reliable Docker development
 
 ### Manual Build
 ```bash
