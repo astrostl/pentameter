@@ -19,7 +19,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
+.PHONY: all build build-static build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
 
 # Default target
 all: build
@@ -32,10 +32,56 @@ build:
 build-static:
 	CGO_ENABLED=0 GOOS=linux $(GOBUILD) -a -installsuffix cgo -o $(BINARY_NAME) .
 
+# Build macOS binaries for Homebrew distribution
+build-macos-binaries:
+	@echo "🍺 Building macOS binaries for Homebrew..."
+	@mkdir -p dist
+	@echo "Building darwin-amd64..."
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD) -o dist/$(BINARY_NAME)-darwin-amd64 .
+	@echo "Building darwin-arm64..."
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GOBUILD) -o dist/$(BINARY_NAME)-darwin-arm64 .
+	@echo "✓ macOS binaries built successfully"
+
+# Package macOS binaries into tar.gz archives
+package-macos-binaries: build-macos-binaries
+	@echo "📦 Packaging macOS binaries..."
+	@cd dist && tar -czf $(BINARY_NAME)-$(VERSION)-darwin-amd64.tar.gz $(BINARY_NAME)-darwin-amd64
+	@cd dist && tar -czf $(BINARY_NAME)-$(VERSION)-darwin-arm64.tar.gz $(BINARY_NAME)-darwin-arm64
+	@echo "✓ macOS packages created:"
+	@echo "  dist/$(BINARY_NAME)-$(VERSION)-darwin-amd64.tar.gz"
+	@echo "  dist/$(BINARY_NAME)-$(VERSION)-darwin-arm64.tar.gz"
+
+# Generate SHA256 checksums for macOS packages
+generate-macos-checksums: package-macos-binaries
+	@echo "🔐 Generating SHA256 checksums..."
+	@cd dist && shasum -a 256 $(BINARY_NAME)-$(VERSION)-darwin-*.tar.gz > checksums.txt
+	@echo "✓ Checksums generated in dist/checksums.txt"
+	@cat dist/checksums.txt
+
+# Update Homebrew formula with new version and checksums
+update-homebrew-formula: generate-macos-checksums
+	@echo "🍺 Updating Homebrew formula..."
+	@if [ ! -f "Formula/pentameter.rb" ]; then \
+		echo "❌ Formula/pentameter.rb not found in current repository"; \
+		exit 1; \
+	fi
+	@AMD64_SHA=$$(cd dist && shasum -a 256 $(BINARY_NAME)-$(VERSION)-darwin-amd64.tar.gz | cut -d' ' -f1); \
+	ARM64_SHA=$$(cd dist && shasum -a 256 $(BINARY_NAME)-$(VERSION)-darwin-arm64.tar.gz | cut -d' ' -f1); \
+	CLEAN_VERSION=$$(echo "$(VERSION)" | sed 's/^v//'); \
+	sed -i '' "s/version \".*\"/version \"$$CLEAN_VERSION\"/" Formula/pentameter.rb; \
+	sed -i '' "s|download/v.*/pentameter-v.*-darwin-amd64.tar.gz|download/$(VERSION)/pentameter-$(VERSION)-darwin-amd64.tar.gz|" Formula/pentameter.rb; \
+	sed -i '' "s|download/v.*/pentameter-v.*-darwin-arm64.tar.gz|download/$(VERSION)/pentameter-$(VERSION)-darwin-arm64.tar.gz|" Formula/pentameter.rb; \
+	sed -i '' "s/PLACEHOLDER_AMD64_SHA256/$$AMD64_SHA/g" Formula/pentameter.rb; \
+	sed -i '' "s/PLACEHOLDER_ARM64_SHA256/$$ARM64_SHA/g" Formula/pentameter.rb
+	@echo "✓ Homebrew formula updated with $(VERSION)"
+	@echo "✓ SHA256 checksums updated"
+	@echo "Formula ready for commit and release"
+
 # Clean build artifacts
 clean:
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)
+	rm -rf dist
 
 # Run tests
 test:
@@ -368,11 +414,17 @@ docker-release: docker-build docker-push
 	@echo "Released astrostl/pentameter:$(VERSION) and astrostl/pentameter:latest"
 
 # Release workflow
-release: quality-strict docker-release
+release: quality-strict docker-release update-homebrew-formula
 	@echo "Release $(VERSION) complete"
 	@echo "Docker images:"
 	@echo "  astrostl/pentameter:latest"
 	@echo "  astrostl/pentameter:$(VERSION)"
+	@echo "macOS binaries:"
+	@echo "  dist/$(BINARY_NAME)-$(VERSION)-darwin-amd64.tar.gz"
+	@echo "  dist/$(BINARY_NAME)-$(VERSION)-darwin-arm64.tar.gz"
+	@echo "  dist/checksums.txt"
+	@echo "Homebrew formula:"
+	@echo "  Formula/pentameter.rb (updated)"
 
 # Show help
 help:
@@ -381,7 +433,11 @@ help:
 	@echo "Build & Clean:"
 	@echo "  build        - Build the Go binary"
 	@echo "  build-static - Build static binary for containers"
-	@echo "  clean        - Clean build artifacts"
+	@echo "  build-macos-binaries - Build macOS binaries for Homebrew (amd64 + arm64)"
+	@echo "  package-macos-binaries - Package macOS binaries into tar.gz archives"
+	@echo "  generate-macos-checksums - Generate SHA256 checksums for macOS packages"
+	@echo "  update-homebrew-formula - Update Homebrew formula with new version and checksums"
+	@echo "  clean        - Clean build artifacts including dist/ directory"
 	@echo "  deps         - Download and tidy dependencies"
 	@echo ""
 	@echo "Testing:"
@@ -437,6 +493,6 @@ help:
 	@echo "  docker-push-single - Push single-platform images only (for testing)"
 	@echo "  docker-manifest - Create multi-platform manifests using manifest-tool"
 	@echo "  docker-release - Build and push multi-platform images to DockerHub"
-	@echo "  release      - Full release workflow (quality-strict + docker-release)"
+	@echo "  release      - Full release workflow (quality-strict + docker-release + homebrew-formula)"
 	@echo ""
 	@echo "  help         - Show this help"

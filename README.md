@@ -71,6 +71,34 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
 
 ## Quick Start
 
+### Option 1: Homebrew (macOS) - Recommended
+
+```bash
+# Add the tap (one time setup)
+brew tap astrostl/pentameter https://github.com/astrostl/pentameter
+
+# Install pentameter
+brew install pentameter
+
+# Set your IntelliCenter IP address
+export PENTAMETER_IC_IP=192.168.1.100
+
+# Start the exporter
+pentameter
+```
+
+**Alternative one-line install:**
+```bash
+# Direct install (automatically adds tap)
+brew install astrostl/pentameter/pentameter
+```
+
+Metrics are available at `http://localhost:8080/metrics`
+
+For complete monitoring with Grafana dashboards, use the Docker Compose option below.
+
+### Option 2: Docker Compose - Full Stack
+
 ```bash
 # Clone the repository (includes all config files)
 git clone https://github.com/astrostl/pentameter.git
