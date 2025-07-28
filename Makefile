@@ -123,7 +123,7 @@ check-gofumpt:
 lint:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run
 
@@ -131,7 +131,7 @@ lint:
 lint-enhanced:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run \
 		--enable=asasalint,asciicheck,bidichk,bodyclose,containedctx,contextcheck,cyclop,decorder,dogsled,dupl,durationcheck,errcheck,errchkjson,errname,errorlint,exhaustive,copyloopvar,forbidigo,forcetypeassert,funlen,ginkgolinter,gocheckcompilerdirectives,gochecknoinits,gocognit,goconst,gocritic,gocyclo,godot,godox,gofmt,gofumpt,goheader,goimports,mnd,gomoddirectives,gomodguard,goprintffuncname,gosec,gosimple,gosmopolitan,govet,grouper,ineffassign,interfacebloat,lll,loggercheck,maintidx,makezero,misspell,nakedret,nestif,nilerr,nilnil,noctx,nolintlint,nonamedreturns,nosprintfhostport,prealloc,predeclared,promlinter,reassign,revive,rowserrcheck,sqlclosecheck,staticcheck,stylecheck,tagalign,usetesting,testableexamples,testpackage,thelper,tparallel,typecheck,unconvert,unparam,unused,usestdlibvars,varnamelen,wastedassign,whitespace,wrapcheck,zerologlint
@@ -320,10 +320,10 @@ deps:
 # Build Docker image (always nuclear - no cache)
 docker-build:
 	@echo "🚀 Building pentameter with aggressive cache clearing..."
-	@$(DOCKER_CMD) compose stop pentameter 2>/dev/null || true
+	@$(DOCKER_CMD) compose stop pentameter-app 2>/dev/null || true
 	@$(DOCKER_CMD) system prune -f
-	@$(DOCKER_CMD) compose build --no-cache pentameter
-	@$(DOCKER_CMD) compose start pentameter
+	@$(DOCKER_CMD) compose build --no-cache pentameter-app
+	@$(DOCKER_CMD) compose start pentameter-app
 	@echo "✓ Pentameter built and started"
 	@echo "Verifying changes took effect:"
 	@sleep 2
