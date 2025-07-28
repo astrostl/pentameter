@@ -45,34 +45,106 @@ make quality-strict # Run all quality checks with strict enforcement
 
 ### Release Process - CRITICAL
 
-**⚠️ COMPLETE RELEASE WORKFLOW: DOCKERHUB + HOMEBREW ⚠️**
+**⚠️ COMPLETE RELEASE WORKFLOW: DOCKERHUB + HOMEBREW + GITHUB ⚠️**
 
-When creating new releases on GitHub, ALWAYS follow the complete publishing workflow:
+This project has a multi-platform release workflow requiring GitHub, DockerHub, and Homebrew coordination. ALWAYS follow the complete workflow below.
 
+**CRITICAL: Clean Working Directory**
+- Ensure `git status` shows no uncommitted changes before starting
+- The version will show as `-dirty` if there are uncommitted changes, breaking the release
+- Use `git stash` to temporarily store any uncommitted changes
+
+**Step 1: Pre-Release Preparation**
 ```bash
-# Create git tag and push to GitHub:
-git tag v1.0.0
-git push origin v1.0.0
+# 1. Ensure clean working directory
+git status  # Must be clean!
 
-# MANDATORY: Complete release (Docker + Homebrew + GitHub)
-make release
+# 2. Update documentation (if needed)
+# - CHANGELOG.md: Add new version section with changes
+# - README.md: Update if new features require documentation
+# - CLAUDE.md: Update process documentation if needed
+
+# 3. Commit documentation updates
+git add CHANGELOG.md README.md CLAUDE.md
+git commit -m "Update documentation for v0.X.X release"
+git push
+
+# 4. Run quality checks to ensure release readiness
+make quality-strict
 ```
 
-**What `make release` does:**
-- Runs `quality-strict` checks (must pass)
-- Builds Docker image with `docker-build` (nuclear rebuild)
-- Tags image as both `:latest` and `:v1.0.0`
-- Builds and pushes multi-platform images (linux/amd64, linux/arm64) to DockerHub
-- Creates multi-platform manifests using manifest-tool
-- **Builds macOS binaries for Homebrew (Intel + Apple Silicon)**
-- **Updates Formula/pentameter.rb with new version and SHA256 checksums**
-- **Generates checksums.txt for GitHub release assets**
+**Step 2: Create Release Tag**
+```bash
+# Create and push version tag - ONLY when ready for release
+git tag v0.X.X
+git push origin v0.X.X
+```
 
-**Why this is critical:** 
+**Step 3: Multi-Platform Release Build**
+The automated `make release` target has dependencies that may fail. Use manual approach:
+
+```bash
+# 3a. Quality checks (must pass)
+make quality-strict
+
+# 3b. Build and push Docker images manually (more reliable)
+# Build multi-platform images
+docker build --platform linux/amd64 -t astrostl/pentameter:v0.X.X-amd64 .
+docker build --platform linux/arm64 -t astrostl/pentameter:v0.X.X-arm64 .
+
+# Tag for latest
+docker tag astrostl/pentameter:v0.X.X-amd64 astrostl/pentameter:latest-amd64
+docker tag astrostl/pentameter:v0.X.X-arm64 astrostl/pentameter:latest-arm64
+
+# Push all images
+docker push astrostl/pentameter:v0.X.X-amd64
+docker push astrostl/pentameter:v0.X.X-arm64
+docker push astrostl/pentameter:latest-amd64
+docker push astrostl/pentameter:latest-arm64
+
+# Create multi-platform manifests (requires manifest-tool)
+export PATH=$PATH:$(go env GOPATH)/bin
+manifest-tool push from-args --platforms linux/amd64,linux/arm64 --template astrostl/pentameter:latest-ARCH --target astrostl/pentameter:latest
+manifest-tool push from-args --platforms linux/amd64,linux/arm64 --template astrostl/pentameter:v0.X.X-ARCH --target astrostl/pentameter:v0.X.X
+
+# 3c. Build Homebrew assets
+make build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula
+```
+
+**Step 4: Create GitHub Release**
+```bash
+# Create GitHub release with generated assets
+gh release create v0.X.X \
+  --title "v0.X.X - Release Title" \
+  --notes "Release notes from CHANGELOG.md..." \
+  dist/pentameter-v0.X.X-darwin-amd64.tar.gz \
+  dist/pentameter-v0.X.X-darwin-arm64.tar.gz \
+  dist/checksums.txt
+```
+
+**Step 5: Final Steps**
+```bash
+# Push updated Homebrew formula with correct checksums
+git add Formula/pentameter.rb
+git commit -m "Update Homebrew formula for v0.X.X with real SHA256 checksums"
+git push origin master
+
+# Verify Homebrew formula works
+brew upgrade  # Should upgrade pentameter without checksum errors
+```
+
+**⚠️ CRITICAL CHECKSUM VERIFICATION**
+- The Homebrew formula MUST have correct SHA256 checksums matching the GitHub release assets
+- If `brew upgrade` fails with "SHA256 mismatch", the checksums in Formula/pentameter.rb are wrong
+- Use the checksums from `dist/checksums.txt` to fix Formula/pentameter.rb
+- Always test the Homebrew formula after release
+
+**Why this workflow is critical:** 
 - Docker users expect images to be available immediately after GitHub releases
-- Homebrew users expect tap formulas to work with published GitHub releases
-- The docker-compose.yml references `astrostl/pentameter:latest` 
+- Homebrew users expect tap formulas to work with published GitHub releases  
+- The docker-compose.yml references `astrostl/pentameter:latest`
 - The Homebrew formula references specific release assets and checksums
+- Checksum mismatches break Homebrew installations for all users
 
 **Individual targets available:**
 - `make docker-tag` - Tag images for publishing
@@ -101,7 +173,29 @@ All DockerHub releases are now multi-platform by default. The standard workflow 
 - `astrostl/pentameter:latest-arm64` - Apple Silicon/ARM64 specific image
 - Version-specific tags for both architectures and manifests
 
-**Troubleshooting:** If `manifest-tool` fails during `make docker-push`, run `make docker-manifest` separately to create the multi-platform manifests. The individual architecture images will work independently, but users will need to specify the architecture manually without the manifest.
+**Troubleshooting Release Issues:**
+
+1. **Docker Build Issues:**
+   - If `make docker-build` fails with "no such service: pentameter", the docker-compose.yml uses published images, not local builds
+   - Use manual Docker commands instead: `docker build --platform linux/amd64 -t astrostl/pentameter:v0.X.X-amd64 .`
+
+2. **Version Shows "-dirty":**
+   - Uncommitted changes make the version "v0.X.X-dirty" which breaks the release process
+   - Use `git stash` to temporarily store changes, complete release, then `git stash pop`
+
+3. **Manifest-tool Issues:**
+   - If `manifest-tool` fails, run `make docker-manifest` separately to create multi-platform manifests
+   - Ensure `manifest-tool` is installed: `go install github.com/estesp/manifest-tool/v2/cmd/manifest-tool@latest`
+   - Add to PATH: `export PATH=$PATH:$(go env GOPATH)/bin`
+
+4. **Homebrew Checksum Mismatches:**
+   - "SHA256 mismatch" errors mean Formula/pentameter.rb has wrong checksums
+   - Use actual checksums from `dist/checksums.txt` to fix the formula
+   - Always verify with `brew upgrade` after fixing
+
+5. **make release Target Issues:**
+   - The automated `make release` may fail due to docker-compose dependencies
+   - Use the manual step-by-step process documented above for more reliable releases
 
 **Why manifest-tool:** Docker buildx requires Docker specifically and doesn't work with nerdctl. The manifest-tool approach builds individual platform images and creates manifests, working with any container runtime.
 
