@@ -181,15 +181,11 @@ issues:
       linters:
         - mnd
         - varnamelen
-        - maintidx
         - funlen
         - gocognit
         - gocyclo
         - cyclop
         - nestif
-        - wrapcheck
-        - errcheck
-        - gosec
     - text: "G114: Use of net/http serve function that has no support for setting timeouts"
       linters:
         - gosec

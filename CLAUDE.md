@@ -593,3 +593,157 @@ The system uses consistent 1-minute (60-second) intervals across all components.
    ```
 
 **To change intervals**: Update all four locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all four settings proportionally to maintain the 1:1:1:1 ratio for optimal metric freshness and cleanup behavior.
+
+## Listen Mode - Live Equipment Monitoring
+
+### Overview
+
+Listen mode (`--listen` flag) provides real-time event monitoring for pool equipment changes. It's designed for debugging, equipment discovery, and understanding IntelliCenter behavior.
+
+### Design Principles
+
+**State-Based Change Detection:**
+- Maintains previous state snapshots for all equipment types
+- Compares current values against previous snapshots to detect changes
+- Only logs when values actually change (not on every poll)
+- Detects initial state on first poll and logs all equipment discovery
+
+**Universal Equipment Discovery:**
+- Automatically discovers and logs ANY equipment type returned by IntelliCenter
+- Works with equipment types not specifically implemented (valves, sensors, remotes, etc.)
+- Uses IntelliCenter's OBJTYP field to classify unknown equipment
+- No hardcoded equipment assumptions - works with any configuration
+
+**Clean Event Logging:**
+- Suppresses verbose operational messages in listen mode
+- Shows only meaningful events: initial state, changes, and errors
+- Event messages use consistent "EVENT:" prefix for easy filtering
+- Temperature changes show both old and new values for context
+
+### Key Features
+
+1. **Rapid Polling**: Defaults to 2-second intervals for quick change detection (vs 60-second default for normal mode)
+2. **Multi-Equipment Tracking**: Monitors circuits, pumps, temperatures, thermal equipment, and features simultaneously
+3. **Unknown Equipment Handling**: Logs equipment types not specifically implemented, using OBJTYP and basic status fields
+4. **Initial State Discovery**: Shows all equipment and current state on startup for complete context
+5. **Operational State Visibility**: For thermal equipment, shows heating/cooling/off states, not just on/off
+
+### Implementation Architecture
+
+**State Management:**
+```go
+// Previous state tracking (main.go)
+var (
+    prevCircuits = make(map[string]CircuitState)
+    prevPumps = make(map[string]float64)
+    prevTemps = make(map[string]float64)
+    prevThermal = make(map[string]ThermalState)
+    prevFeatures = make(map[string]string)
+)
+```
+
+**Change Detection Pattern:**
+```go
+// Compare current state to previous state
+if prevState, exists := prevMap[equipmentID]; !exists {
+    // First time seeing this equipment - log initial state
+    log.Printf("EVENT: Equipment detected: %s", details)
+    prevMap[equipmentID] = currentState
+} else if currentState != prevState {
+    // State changed - log the change
+    log.Printf("EVENT: Equipment changed: %s → %s", prevState, currentState)
+    prevMap[equipmentID] = currentState
+}
+```
+
+**Unknown Equipment Discovery:**
+```go
+// For equipment types without specific implementation
+for _, obj := range response.Body.ObjectList {
+    objType := obj.Params["OBJTYP"].(string)
+    if !isKnownType(objType) {
+        // Log unknown equipment with available metadata
+        log.Printf("EVENT: Unknown equipment detected - %s (%s) type=%s status=%s",
+            name, objID, objType, status)
+    }
+}
+```
+
+### Configuration Behavior
+
+**Automatic Interval Adjustment:**
+- When `--listen` is specified without `--interval`, polling defaults to 2 seconds
+- When `--interval` is specified with `--listen`, uses the specified interval
+- Without `--listen`, polling defaults to 60 seconds regardless of interval flag
+
+**Listen Mode Detection:**
+```go
+// Check for listen mode from flag or environment variable
+listenMode := *listenFlag || os.Getenv("PENTAMETER_LISTEN") == "true"
+
+// Adjust default polling interval for listen mode
+if listenMode && *intervalFlag == defaultPollInterval {
+    *intervalFlag = 2  // Rapid polling for change detection
+}
+```
+
+### Output Examples
+
+**Initial Discovery:**
+```
+2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.50.118:6680
+2025/10/11 14:46:29 Listen mode enabled - logging equipment changes only
+2025/10/11 14:46:29 Starting live event monitoring...
+2025/10/11 14:46:29 EVENT: Spa temperature detected: 72.0°F
+2025/10/11 14:46:29 EVENT: Pool detected: ON
+2025/10/11 14:46:29 EVENT: Spa Light detected: OFF
+2025/10/11 14:46:29 EVENT: Pool Heat Pump detected: off
+```
+
+**Change Detection:**
+```
+2025/10/11 14:47:04 EVENT: Air temperature changed: 75.0°F → 76.0°F
+2025/10/11 14:47:15 EVENT: Spa Light turned ON
+2025/10/11 14:47:32 EVENT: Unknown equipment detected - Valve Motor (V0001) type=VALVE status=CLOSED
+```
+
+### Use Cases
+
+1. **Debugging Equipment Issues**: Watch real-time state changes when troubleshooting
+2. **Understanding IntelliCenter Behavior**: Learn how equipment responds to commands
+3. **Discovering Equipment Configuration**: Find all equipment in the system, including types not yet implemented
+4. **Testing New Features**: Verify equipment changes are detected correctly
+5. **Development**: Understand equipment behavior before implementing specific support
+
+### Integration with Metrics Mode
+
+Listen mode and normal metrics mode are mutually compatible:
+- Both can run simultaneously (listen mode doesn't disable metrics collection)
+- Metrics continue to be exposed on HTTP port even in listen mode
+- Prometheus can scrape metrics while listen mode logs events
+- Use listen mode for debugging, normal mode for production monitoring
+
+### Testing Listen Mode
+
+**Quick Test:**
+```bash
+# Run for 30 seconds and capture output
+pentameter --ic-ip 192.168.1.100 --listen --interval 1 2>&1 | tee /tmp/listen_test.log
+# Trigger equipment changes (turn lights on/off, adjust temperature setpoints)
+# Review captured output for expected EVENT messages
+```
+
+**Docker Testing:**
+```bash
+# Override docker-compose.yml to enable listen mode
+docker run --rm -e PENTAMETER_IC_IP=192.168.1.100 -e PENTAMETER_LISTEN=true astrostl/pentameter:latest
+```
+
+### Future Enhancements
+
+Potential improvements for listen mode:
+- JSON output format for structured logging
+- WebSocket endpoint for real-time event streaming to web clients
+- Event filtering by equipment type or name
+- Configurable event history (show last N changes on startup)
+- Integration with external notification systems (webhooks, MQTT, etc.)

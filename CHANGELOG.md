@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Listen mode (`--listen` flag) for live equipment change monitoring with rapid polling
+- Real-time event logging showing initial equipment state and all changes
+- Unknown equipment discovery - automatically detects and logs equipment types not specifically implemented
+- Change detection for all equipment types (circuits, pumps, temperatures, thermal equipment, features)
+- Configurable rapid polling interval (defaults to 2 seconds in listen mode)
+- Clean event-only output mode for monitoring and debugging
+
+### Changed
+- Dependency updates: prometheus/client_golang 1.22.0 → 1.23.2
+
 ## [0.2.0] - 2025-07-27
 
 ### Added

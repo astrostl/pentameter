@@ -19,7 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Version information set at build time
+// Version information set at build time.
 var version = "dev"
 
 // Constants.
@@ -38,8 +38,14 @@ const (
 	httpWriteTimeout    = 15 * time.Second
 	httpIdleTimeout     = 60 * time.Second
 
+	// Listen mode polling interval (rapid polling for change detection).
+	listenModePollInterval = 2
+
 	// Circuit status constants.
 	statusOn = "ON"
+
+	// Boolean string constants.
+	trueString = "true"
 
 	// Thermal status constants.
 	thermalStatusOff      = 0
@@ -128,7 +134,9 @@ var (
 	thermalStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "thermal_status",
-			Help: "Thermal equipment operational status derived from IntelliCenter HTMODE+HTSRC (0=off, 1=heating, 2=idle, 3=cooling). Note: 'idle' is pentameter's interpretation of HTMODE=0+assigned heater, not an IntelliCenter native status.",
+			Help: "Thermal equipment operational status derived from IntelliCenter HTMODE+HTSRC " +
+				"(0=off, 1=heating, 2=idle, 3=cooling). Note: 'idle' is pentameter's interpretation " +
+				"of HTMODE=0+assigned heater, not an IntelliCenter native status.",
 		},
 		[]string{"heater", "name", "subtyp"},
 	)
@@ -166,10 +174,25 @@ type PoolMonitor struct {
 	referencedHeaters map[string]BodyHeaterInfo // Track body-to-heater assignments
 	pendingRequests   map[string]time.Time      // Track messageID -> request time
 	featureConfig     map[string]string         // Track feature objnam -> SHOMNU for visibility
+	previousState     *EquipmentState           // Previous state for change detection
 	intelliCenterURL  string
 	retryConfig       RetryConfig
 	connected         bool
 	debugMode         bool // Enable enhanced debugging
+	listenMode        bool // Enable live event logging mode
+}
+
+// EquipmentState tracks the current state of all equipment for change detection.
+type EquipmentState struct {
+	WaterTemps      map[string]float64 // body -> temperature
+	PumpRPMs        map[string]float64 // pump -> RPM
+	Circuits        map[string]string  // circuit -> ON/OFF
+	Thermals        map[string]int     // heater -> status (0=off, 1=heating, 2=idle, 3=cooling)
+	Features        map[string]string  // feature -> ON/OFF
+	UnknownEquip    map[string]string  // objnam -> "OBJTYP:STATUS" for equipment not otherwise tracked
+	ParseErrors     map[string]bool    // Track parse errors we've already logged
+	SkippedFeatures map[string]bool    // Track skipped features we've already logged
+	AirTemp         float64
 }
 
 type BodyHeaterInfo struct {
@@ -190,7 +213,7 @@ type RetryConfig struct {
 	HealthCheckRate time.Duration
 }
 
-func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode bool) *PoolMonitor {
+func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listenMode bool) *PoolMonitor {
 	return &PoolMonitor{
 		intelliCenterURL: fmt.Sprintf("ws://%s", net.JoinHostPort(intelliCenterIP, intelliCenterPort)),
 		retryConfig: RetryConfig{
@@ -205,7 +228,9 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode bool) *
 		referencedHeaters: make(map[string]BodyHeaterInfo),
 		pendingRequests:   make(map[string]time.Time),
 		featureConfig:     make(map[string]string),
+		previousState:     nil,
 		debugMode:         debugMode,
+		listenMode:        listenMode,
 	}
 }
 
@@ -237,7 +262,10 @@ func (pm *PoolMonitor) ConnectWithRetry(ctx context.Context) error {
 		dialer := websocket.DefaultDialer
 		dialer.HandshakeTimeout = handshakeTimeout
 
-		conn, _, err := dialer.DialContext(ctx, websocketURL.String(), nil)
+		conn, resp, err := dialer.DialContext(ctx, websocketURL.String(), nil)
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		if err != nil {
 			lastErr = err
 			continue
@@ -294,11 +322,19 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 	}
 
 	// Get thermal equipment status
-	log.Printf("DEBUG: About to call getThermalStatus()")
+	pm.logIfNotListeningf("DEBUG: About to call getThermalStatus()")
 	if err := pm.getThermalStatus(); err != nil {
 		return fmt.Errorf("failed to get thermal status: %w", err)
 	}
-	log.Printf("DEBUG: getThermalStatus() completed successfully")
+	pm.logIfNotListeningf("DEBUG: getThermalStatus() completed successfully")
+
+	// In listen mode, query ALL objects to discover unknown equipment
+	if pm.listenMode {
+		if err := pm.getAllObjects(); err != nil {
+			// Don't fail the whole poll if this fails, just log it
+			pm.logIfNotListeningf("Warning: failed to get all objects: %v", err)
+		}
+	}
 
 	return nil
 }
@@ -342,7 +378,7 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 	// Track pending request
 	pm.pendingRequests[messageID] = sentTime
 	if pm.debugMode {
-		log.Printf("DEBUG: Sending body temp request with messageID: %s", messageID)
+		pm.logIfNotListeningf("DEBUG: Sending body temp request with messageID: %s", messageID)
 	}
 
 	// Send request
@@ -359,7 +395,7 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 	}
 
 	if pm.debugMode {
-		log.Printf("DEBUG: Received body temp response with messageID: %s (sent: %s)", resp.MessageID, messageID)
+		pm.logIfNotListeningf("DEBUG: Received body temp response with messageID: %s (sent: %s)", resp.MessageID, messageID)
 	}
 
 	// Validate response correlation
@@ -373,7 +409,7 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 	// Clean up pending request
 	pm.validateResponse(messageID)
 	if pm.debugMode {
-		log.Printf("DEBUG: Body temp messageID correlation successful: %s", messageID)
+		pm.logIfNotListeningf("DEBUG: Body temp messageID correlation successful: %s", messageID)
 	}
 
 	if resp.Response != "200" {
@@ -405,13 +441,23 @@ func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status str
 
 	tempFahrenheit, err := strconv.ParseFloat(tempStr, 64)
 	if err != nil {
-		log.Printf("Failed to parse temperature %s for %s: %v", tempStr, name, err)
+		// Only log parse errors once in listen mode
+		errorKey := fmt.Sprintf("temp-parse-%s", name)
+		if pm.listenMode && pm.previousState != nil {
+			if !pm.previousState.ParseErrors[errorKey] {
+				log.Printf("Failed to parse temperature %s for %s: %v", tempStr, name, err)
+				pm.previousState.ParseErrors[errorKey] = true
+			}
+		} else if !pm.listenMode {
+			log.Printf("Failed to parse temperature %s for %s: %v", tempStr, name, err)
+		}
 		return
 	}
 
 	// Store temperature in Fahrenheit as per project standard
 	poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
-	log.Printf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+	pm.trackWaterTemp(name, tempFahrenheit)
+	pm.logIfNotListeningf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 }
 
 func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string) {
@@ -427,7 +473,7 @@ func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string)
 
 	// HTMODE >= 1 means heater is on (1=actively heating, 2=on but not heating)
 	pm.bodyHeatingStatus[strings.ToLower(name)] = htmode >= 1
-	log.Printf("Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
+	pm.logIfNotListeningf("Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
 }
 
 func (pm *PoolMonitor) processHeaterAssignment(
@@ -455,7 +501,7 @@ func (pm *PoolMonitor) processHeaterAssignment(
 	}
 
 	if pm.debugMode {
-		log.Printf("DEBUG: Body %s (%s) references heater %s with HTMODE=%d", name, objName, htsrc, htmode)
+		pm.logIfNotListeningf("DEBUG: Body %s (%s) references heater %s with HTMODE=%d", name, objName, htsrc, htmode)
 	}
 }
 
@@ -522,7 +568,8 @@ func (pm *PoolMonitor) getAirTemperature() error {
 
 			// Store temperature in Fahrenheit as per project standard
 			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
-			log.Printf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+			pm.trackAirTemp(tempFahrenheit)
+			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 	}
 
@@ -546,7 +593,7 @@ func (pm *PoolMonitor) getPumpData() error {
 }
 
 func (pm *PoolMonitor) getCircuitStatus() error {
-	log.Printf("DEBUG: getCircuitStatus() starting")
+	pm.logIfNotListeningf("DEBUG: getCircuitStatus() starting")
 	resp, err := pm.requestCircuitData()
 	if err != nil {
 		return err
@@ -557,7 +604,7 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 		pm.processCircuitObject(obj)
 	}
 
-	log.Printf("DEBUG: getCircuitStatus() completed successfully")
+	pm.logIfNotListeningf("DEBUG: getCircuitStatus() completed successfully")
 	return nil
 }
 
@@ -620,6 +667,7 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 	} else if pm.isValidCircuit(obj.ObjName, name, subtype) {
 		statusValue := pm.calculateCircuitStatusValue(name, status, obj.ObjName)
 		circuitStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
+		pm.trackCircuit(name, status)
 	}
 }
 
@@ -631,13 +679,33 @@ func (pm *PoolMonitor) isValidCircuit(objName, name, subtype string) bool {
 
 func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtype string) {
 	// Check if feature should be shown based on IntelliCenter's "Show as Feature" setting
-	if shomnu, exists := pm.featureConfig[obj.ObjName]; exists {
-		if !strings.HasSuffix(shomnu, "w") {
-			log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, obj.ObjName, shomnu)
-			return
-		}
+	shomnu, exists := pm.featureConfig[obj.ObjName]
+	if !exists || strings.HasSuffix(shomnu, "w") {
+		// Feature should be shown - continue to processing
+		pm.processVisibleFeature(obj, name, status, subtype)
+		return
 	}
 
+	// Feature hidden - log skip message
+	pm.logSkippedFeature(name, obj.ObjName, shomnu)
+}
+
+func (pm *PoolMonitor) logSkippedFeature(name, objName, shomnu string) {
+	// Only log skipped features once in listen mode
+	if pm.listenMode && pm.previousState != nil {
+		if !pm.previousState.SkippedFeatures[objName] {
+			log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
+			pm.previousState.SkippedFeatures[objName] = true
+		}
+		return
+	}
+
+	if !pm.listenMode {
+		log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
+	}
+}
+
+func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subtype string) {
 	// Calculate feature status value
 	statusValue := 0.0
 	if status == statusOn {
@@ -646,8 +714,9 @@ func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtyp
 
 	// Update Prometheus metric using IntelliCenter's SUBTYP
 	featureStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
+	pm.trackFeature(name, status)
 
-	log.Printf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, status, statusValue)
+	pm.logIfNotListeningf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, status, statusValue)
 }
 
 func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string) float64 {
@@ -668,7 +737,7 @@ func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string) float64 {
 		statusValue = 1.0
 	}
 
-	log.Printf("Updated heater circuit status: %s (%s) = [%.0f] (Body: %s, Heating: %v)",
+	pm.logIfNotListeningf("Updated heater circuit status: %s (%s) = [%.0f] (Body: %s, Heating: %v)",
 		name, objName, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
 
 	return statusValue
@@ -691,15 +760,15 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string) flo
 		statusValue = 1.0
 	}
 
-	log.Printf("Updated circuit status: %s (%s) = %s [%.0f]", name, objName, status, statusValue)
+	pm.logIfNotListeningf("Updated circuit status: %s (%s) = %s [%.0f]", name, objName, status, statusValue)
 	return statusValue
 }
 
 func (pm *PoolMonitor) getThermalStatus() error {
 	// Process all heaters, not just referenced ones
-	log.Printf("DEBUG: getThermalStatus() called - Processing all thermal equipment")
+	pm.logIfNotListeningf("DEBUG: getThermalStatus() called - Processing all thermal equipment")
 	if pm.debugMode {
-		log.Printf("DEBUG: Debug mode is enabled, referenced heaters: %d", len(pm.referencedHeaters))
+		pm.logIfNotListeningf("DEBUG: Debug mode is enabled, referenced heaters: %d", len(pm.referencedHeaters))
 	}
 
 	// Query all heaters, not just referenced ones
@@ -722,7 +791,7 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 	pm.pendingRequests[messageID] = sentTime
 	if pm.debugMode {
-		log.Printf("DEBUG: Sending thermal status request for all thermal devices")
+		pm.logIfNotListeningf("DEBUG: Sending thermal status request for all thermal devices")
 	}
 
 	if err := pm.conn.WriteJSON(req); err != nil {
@@ -784,15 +853,16 @@ func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 
 	// Update Prometheus metric
 	thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
+	pm.trackThermal(name, heaterStatusValue)
 
 	// Handle temperature setpoints
-	pm.updateThermalSetpoints(obj.ObjName, name, subtype, isReferenced, bodyInfo, heaterStatusValue)
+	pm.updateThermalSetpoints(obj.ObjName, name, subtype, isReferenced, &bodyInfo, heaterStatusValue)
 
-	log.Printf("Updated thermal status: %s (%s) = %d [%s]",
+	pm.logIfNotListeningf("Updated thermal status: %s (%s) = %d [%s]",
 		name, obj.ObjName, heaterStatusValue, statusDescription)
 }
 
-func (pm *PoolMonitor) updateThermalSetpoints(objName, name, subtype string, isReferenced bool, bodyInfo BodyHeaterInfo, heaterStatusValue int) {
+func (pm *PoolMonitor) updateThermalSetpoints(objName, name, subtype string, isReferenced bool, bodyInfo *BodyHeaterInfo, heaterStatusValue int) {
 	// Always show heatpoint for referenced heaters
 	if isReferenced {
 		thermalLowSetpoint.WithLabelValues(objName, name, subtype).Set(bodyInfo.LoTemp)
@@ -813,7 +883,11 @@ func (pm *PoolMonitor) updateThermalSetpoints(objName, name, subtype string, isR
 func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo *BodyHeaterInfo, _ string) int {
 	switch bodyInfo.HTMode {
 	case htModeOff:
-		return thermalStatusIdle // Idle (heater assigned but not demanded)
+		// When heater is off, determine if it's idle (within setpoints) or off (outside setpoints)
+		if bodyInfo.Temp >= bodyInfo.LoTemp && bodyInfo.Temp <= bodyInfo.HiTemp {
+			return thermalStatusIdle // Idle (heater assigned, temperature within setpoints)
+		}
+		return thermalStatusOff // Off (temperature outside setpoints, heater not needed)
 	case htModeHeating:
 		return thermalStatusHeating // Heating (traditional gas heater)
 	case htModeHeatPumpHeating:
@@ -881,7 +955,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 
 	pm.pendingRequests[messageID] = sentTime
 	if pm.debugMode {
-		log.Printf("DEBUG: Sending pump data request with messageID: %s", messageID)
+		pm.logIfNotListeningf("DEBUG: Sending pump data request with messageID: %s", messageID)
 	}
 
 	if err := pm.conn.WriteJSON(req); err != nil {
@@ -897,7 +971,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 
 	responseTime := time.Since(sentTime)
 	if pm.debugMode {
-		log.Printf("DEBUG: Received pump data response with messageID: %s (sent: %s) in %v", resp.MessageID, messageID, responseTime)
+		pm.logIfNotListeningf("DEBUG: Received pump data response with messageID: %s (sent: %s) in %v", resp.MessageID, messageID, responseTime)
 	}
 
 	if resp.MessageID != messageID {
@@ -914,7 +988,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 	}
 
 	if pm.debugMode {
-		log.Printf("DEBUG: Pump data messageID correlation successful: %s", messageID)
+		pm.logIfNotListeningf("DEBUG: Pump data messageID correlation successful: %s", messageID)
 	}
 
 	if resp.Response != "200" {
@@ -922,7 +996,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 	}
 
 	if pm.debugMode {
-		log.Printf("DEBUG: Raw pump response data: %+v", resp.ObjectList)
+		pm.logIfNotListeningf("DEBUG: Raw pump response data: %+v", resp.ObjectList)
 	}
 
 	return &resp, responseTime, nil
@@ -944,15 +1018,16 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 	}
 
 	pumpRPM.WithLabelValues(obj.ObjName, name).Set(rpm)
+	pm.trackPumpRPM(name, rpm)
 	pm.logPumpUpdate(name, obj.ObjName, rpm, status, responseTime)
 	return nil
 }
 
 func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status string, responseTime time.Duration) {
 	if pm.debugMode {
-		log.Printf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
+		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
 	} else {
-		log.Printf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s)", name, objName, rpm, status)
+		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s)", name, objName, rpm, status)
 	}
 }
 
@@ -1049,6 +1124,12 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 	return defaultValue
 }
 
+func (pm *PoolMonitor) logIfNotListeningf(format string, v ...interface{}) {
+	if !pm.listenMode {
+		log.Printf(format, v...)
+	}
+}
+
 func (pm *PoolMonitor) LoadFeatureConfiguration(_ context.Context) error {
 	messageID := fmt.Sprintf("config-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
 
@@ -1122,16 +1203,258 @@ func (pm *PoolMonitor) processConfigurationItem(item interface{}) {
 	log.Printf("Loaded feature config: %s -> %s", objName, shomnu)
 }
 
+func (pm *PoolMonitor) initializeState() {
+	pm.previousState = &EquipmentState{
+		WaterTemps:      make(map[string]float64),
+		PumpRPMs:        make(map[string]float64),
+		Circuits:        make(map[string]string),
+		Thermals:        make(map[string]int),
+		Features:        make(map[string]string),
+		UnknownEquip:    make(map[string]string),
+		ParseErrors:     make(map[string]bool),
+		SkippedFeatures: make(map[string]bool),
+	}
+}
+
+func (pm *PoolMonitor) trackWaterTemp(name string, temp float64) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	prevTemp, exists := pm.previousState.WaterTemps[name]
+	if !exists {
+		// First time seeing this equipment
+		log.Printf("EVENT: %s temperature detected: %.1f°F", name, temp)
+	} else if prevTemp != temp {
+		// Value changed
+		log.Printf("EVENT: %s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
+	}
+	pm.previousState.WaterTemps[name] = temp
+}
+
+func (pm *PoolMonitor) trackAirTemp(temp float64) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	if pm.previousState.AirTemp == 0 {
+		// First time seeing air temp
+		log.Printf("EVENT: Air temperature detected: %.1f°F", temp)
+	} else if pm.previousState.AirTemp != temp {
+		// Temperature changed
+		log.Printf("EVENT: Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
+	}
+	pm.previousState.AirTemp = temp
+}
+
+func (pm *PoolMonitor) trackPumpRPM(name string, rpm float64) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	prevRPM, exists := pm.previousState.PumpRPMs[name]
+	if !exists {
+		// First time seeing this pump
+		log.Printf("EVENT: %s detected: %.0f RPM", name, rpm)
+	} else if prevRPM != rpm {
+		// RPM changed
+		log.Printf("EVENT: %s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
+	}
+	pm.previousState.PumpRPMs[name] = rpm
+}
+
+func (pm *PoolMonitor) trackCircuit(name, status string) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	prevStatus, exists := pm.previousState.Circuits[name]
+	if !exists {
+		// First time seeing this circuit
+		log.Printf("EVENT: %s detected: %s", name, status)
+	} else if prevStatus != status {
+		// Status changed
+		log.Printf("EVENT: %s turned %s", name, status)
+	}
+	pm.previousState.Circuits[name] = status
+}
+
+func (pm *PoolMonitor) trackThermal(name string, status int) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	prevStatus, exists := pm.previousState.Thermals[name]
+	if !exists {
+		// First time seeing this thermal equipment
+		log.Printf("EVENT: %s detected: %s", name, pm.getStatusDescription(status))
+	} else if prevStatus != status {
+		// Status changed
+		log.Printf("EVENT: %s status changed: %s → %s", name,
+			pm.getStatusDescription(prevStatus), pm.getStatusDescription(status))
+	}
+	pm.previousState.Thermals[name] = status
+}
+
+func (pm *PoolMonitor) trackFeature(name, status string) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	prevStatus, exists := pm.previousState.Features[name]
+	if !exists {
+		// First time seeing this feature
+		log.Printf("EVENT: %s detected: %s", name, status)
+	} else if prevStatus != status {
+		// Status changed
+		log.Printf("EVENT: %s turned %s", name, status)
+	}
+	pm.previousState.Features[name] = status
+}
+
+func (pm *PoolMonitor) getAllObjects() error {
+	messageID := fmt.Sprintf("all-objects-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:   "GetParamList",
+		Condition: "", // No filter - get everything
+		ObjectList: []ObjectQuery{
+			{
+				ObjName: "INCR",
+				Keys:    []string{"SNAME", "STATUS", "OBJTYP", "SUBTYP"},
+			},
+		},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send all objects request: %w", err)
+	}
+
+	var resp IntelliCenterResponse
+	if err := pm.conn.ReadJSON(&resp); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read all objects response: %w", err)
+	}
+
+	if resp.MessageID != messageID {
+		delete(pm.pendingRequests, messageID)
+		pm.connected = false
+		return fmt.Errorf("all objects messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("all objects API request failed with response: %s", resp.Response)
+	}
+
+	// Process all objects and track unknown ones
+	for _, obj := range resp.ObjectList {
+		pm.trackUnknownEquipment(obj)
+	}
+
+	return nil
+}
+
+func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
+	if !pm.listenMode || pm.previousState == nil {
+		return
+	}
+
+	objType := obj.Params["OBJTYP"]
+	name := obj.Params["SNAME"]
+	status := obj.Params["STATUS"]
+	subtype := obj.Params["SUBTYP"]
+
+	// Skip if already handled by specific equipment types
+	switch objType {
+	case "BODY", "PUMP", "CIRCUIT", "HEATER":
+		return // Already tracked by specific handlers
+	case "":
+		return // No object type, skip
+	}
+
+	// Skip internal/system objects
+	if strings.HasPrefix(obj.ObjName, "_") || strings.HasPrefix(obj.ObjName, "X") {
+		return
+	}
+
+	// Build a tracking key with meaningful info
+	trackingValue := fmt.Sprintf("%s:%s", objType, status)
+	if subtype != "" {
+		trackingValue = fmt.Sprintf("%s/%s:%s", objType, subtype, status)
+	}
+
+	prevValue, exists := pm.previousState.UnknownEquip[obj.ObjName]
+
+	// Log equipment changes with appropriate format
+	if !exists {
+		pm.logUnknownEquipmentDetected(name, obj.ObjName, objType, status)
+	} else if prevValue != trackingValue {
+		pm.logUnknownEquipmentChanged(name, obj.ObjName, prevValue, trackingValue)
+	}
+
+	pm.previousState.UnknownEquip[obj.ObjName] = trackingValue
+}
+
+func (pm *PoolMonitor) logUnknownEquipmentDetected(name, objName, objType, status string) {
+	if name != "" {
+		log.Printf("EVENT: Unknown equipment detected - %s (%s) type=%s status=%s", name, objName, objType, status)
+		return
+	}
+	log.Printf("EVENT: Unknown equipment detected - %s type=%s status=%s", objName, objType, status)
+}
+
+func (pm *PoolMonitor) logUnknownEquipmentChanged(name, objName, prevValue, trackingValue string) {
+	if name != "" {
+		log.Printf("EVENT: Unknown equipment changed - %s (%s) %s → %s", name, objName, prevValue, trackingValue)
+		return
+	}
+	log.Printf("EVENT: Unknown equipment changed - %s %s → %s", objName, prevValue, trackingValue)
+}
+
 func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Handler {
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }
 
-func main() {
-	// Command line flags with environment variable fallbacks
+type appConfig struct {
+	intelliCenterIP   string
+	intelliCenterPort string
+	httpPort          string
+	debugMode         bool
+	listenMode        bool
+	pollInterval      time.Duration
+}
+
+func parseCommandLineFlags() *appConfig {
 	intelliCenterIP := flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""), "IntelliCenter IP address (required, env: PENTAMETER_IC_IP)")
 	intelliCenterPort := flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"), "IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)")
 	httpPort := flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"), "HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)")
-	debugMode := flag.Bool("debug", getEnvOrDefault("PENTAMETER_DEBUG", "false") == "true", "Enable enhanced debugging (env: PENTAMETER_DEBUG)")
+	debugMode := flag.Bool("debug", getEnvOrDefault("PENTAMETER_DEBUG", "false") == trueString, "Enable enhanced debugging (env: PENTAMETER_DEBUG)")
+	listenMode := flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
+		"Enable live event logging mode (rapid polling, log changes only) (env: PENTAMETER_LISTEN)")
 	pollIntervalSeconds := flag.Int("interval", func() int {
 		if env := os.Getenv("PENTAMETER_INTERVAL"); env != "" {
 			if val, err := strconv.Atoi(env); err == nil {
@@ -1143,28 +1466,45 @@ func main() {
 	showVersion := flag.Bool("version", false, "Show version information")
 	flag.Parse()
 
-	// Handle version flag
 	if *showVersion {
-		fmt.Printf("pentameter %s\n", version)
+		log.Printf("pentameter %s", version)
 		os.Exit(0)
 	}
 
-	// Convert interval seconds to duration
 	pollInterval := time.Duration(*pollIntervalSeconds) * time.Second
+	if *listenMode && *pollIntervalSeconds == defaultPollInterval {
+		pollInterval = listenModePollInterval * time.Second
+	}
 
-	// Validate required parameters
 	if *intelliCenterIP == "" {
 		log.Fatal("IntelliCenter IP address is required. Use --ic-ip flag or PENTAMETER_IC_IP environment variable")
 	}
 
-	log.Printf("Starting pool monitor for IntelliCenter at %s:%s", *intelliCenterIP, *intelliCenterPort)
-	log.Printf("HTTP server will run on port %s", *httpPort)
-	log.Printf("Polling interval: %v", pollInterval)
-	if *debugMode {
+	return &appConfig{
+		intelliCenterIP:   *intelliCenterIP,
+		intelliCenterPort: *intelliCenterPort,
+		httpPort:          *httpPort,
+		debugMode:         *debugMode,
+		listenMode:        *listenMode,
+		pollInterval:      pollInterval,
+	}
+}
+
+func logStartupMessage(cfg *appConfig) {
+	log.Printf("Starting pool monitor for IntelliCenter at %s:%s", cfg.intelliCenterIP, cfg.intelliCenterPort)
+	if cfg.listenMode {
+		log.Printf("Listen mode enabled - logging equipment changes only")
+		log.Printf("Polling interval: %v (rapid polling for change detection)", cfg.pollInterval)
+	} else {
+		log.Printf("HTTP server will run on port %s", cfg.httpPort)
+		log.Printf("Polling interval: %v", cfg.pollInterval)
+	}
+	if cfg.debugMode {
 		log.Printf("Enhanced debugging enabled")
 	}
+}
 
-	// Create custom registry to avoid default Go metrics
+func createPrometheusRegistry() *prometheus.Registry {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(poolTemperature)
 	registry.MustRegister(airTemperature)
@@ -1176,14 +1516,32 @@ func main() {
 	registry.MustRegister(thermalLowSetpoint)
 	registry.MustRegister(thermalHighSetpoint)
 	registry.MustRegister(featureStatus)
+	return registry
+}
 
-	// Create pool monitor
-	monitor := NewPoolMonitor(*intelliCenterIP, *intelliCenterPort, *debugMode)
+func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) {
+	http.Handle("/metrics", createMetricsHandler(registry, monitor))
+	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write([]byte("OK")); err != nil {
+			log.Printf("Failed to write health check response: %v", err)
+		}
+	})
 
-	// Create context for graceful shutdown
+	serverAddr := ":" + httpPort
+	log.Printf("Starting Prometheus metrics server on %s", serverAddr)
+	log.Printf("Metrics available at http://localhost:%s/metrics", httpPort)
+	startServer(serverAddr)
+}
+
+func main() {
+	cfg := parseCommandLineFlags()
+	logStartupMessage(cfg)
+
+	registry := createPrometheusRegistry()
+	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.debugMode, cfg.listenMode)
 	ctx := context.Background()
 
-	// Connect to IntelliCenter
 	if err := monitor.Connect(ctx); err != nil {
 		log.Fatalf("Failed to connect to IntelliCenter: %v", err)
 	}
@@ -1193,27 +1551,14 @@ func main() {
 		}
 	}()
 
-	// Start temperature polling in background
-	go monitor.StartTemperaturePolling(ctx, pollInterval)
+	if cfg.listenMode {
+		log.Println("Starting live event monitoring...")
+		monitor.StartTemperaturePolling(ctx, cfg.pollInterval)
+		return
+	}
 
-	// Setup Prometheus metrics endpoint with custom registry and timestamp
-	http.Handle("/metrics", createMetricsHandler(registry, monitor))
-
-	// Setup health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte("OK")); err != nil {
-			log.Printf("Failed to write health check response: %v", err)
-		}
-	})
-
-	// Start HTTP server
-	serverAddr := ":" + *httpPort
-	log.Printf("Starting Prometheus metrics server on %s", serverAddr)
-	log.Printf("Metrics available at http://localhost:%s/metrics", *httpPort)
-
-	// Server startup in separate function to avoid exitAfterDefer issue
-	startServer(serverAddr)
+	go monitor.StartTemperaturePolling(ctx, cfg.pollInterval)
+	setupHTTPEndpoints(registry, monitor, cfg.httpPort)
 }
 
 func startServer(serverAddr string) {

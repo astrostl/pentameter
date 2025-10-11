@@ -10,7 +10,7 @@ services:
       - PENTAMETER_IC_PORT=${PENTAMETER_IC_PORT:-6680}
       - PENTAMETER_HTTP_PORT=${PENTAMETER_HTTP_PORT:-8080}
       - PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}
-      - PENTAMETER_DEBUG=${PENTAMETER_DEBUG:-true}
+      - PENTAMETER_DEBUG=${PENTAMETER_DEBUG:-false}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1"]
       interval: 60s

@@ -234,7 +234,73 @@ All configuration options can be set via command line flags or environment varia
 | `--ic-ip` | `PENTAMETER_IC_IP` | (required) | IntelliCenter IP address |
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
-| `--interval` | `PENTAMETER_INTERVAL` | `60` | Temperature polling interval (seconds) |
+| `--interval` | `PENTAMETER_INTERVAL` | `60` | Polling interval (seconds), `2` in listen mode |
+| `--listen` | `PENTAMETER_LISTEN` | `false` | Enable live event monitoring mode |
+| `--debug` | `PENTAMETER_DEBUG` | `false` | Enable enhanced debugging |
+| `--version` | N/A | N/A | Show version information |
+
+## Listen Mode - Live Equipment Monitoring
+
+Listen mode provides real-time event logging for pool equipment changes, perfect for debugging, discovering equipment, and monitoring activity.
+
+### Features
+
+- **Live Change Detection**: Logs equipment state changes as they happen
+- **Initial State Discovery**: Shows all equipment and current state on startup
+- **Unknown Equipment Detection**: Automatically discovers equipment types not specifically implemented (valves, sensors, remotes, etc.)
+- **Rapid Polling**: Defaults to 2-second intervals for quick change detection
+- **Clean Output**: Event-only logging without verbose operational messages
+
+### Usage
+
+```bash
+# Basic listen mode (2-second polling)
+pentameter --ic-ip 192.168.1.100 --listen
+
+# Custom polling interval
+pentameter --ic-ip 192.168.1.100 --listen --interval 1
+
+# Via environment variable
+export PENTAMETER_IC_IP=192.168.1.100
+export PENTAMETER_LISTEN=true
+pentameter
+```
+
+### Example Output
+
+```
+2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.1.100:6680
+2025/10/11 14:46:29 Listen mode enabled - logging equipment changes only
+2025/10/11 14:46:29 Polling interval: 2s (rapid polling for change detection)
+2025/10/11 14:46:29 Connected to IntelliCenter at ws://192.168.1.100:6680 (attempt 1/6)
+2025/10/11 14:46:29 Starting live event monitoring...
+2025/10/11 14:46:29 EVENT: Spa temperature detected: 72.0°F
+2025/10/11 14:46:29 EVENT: Air temperature detected: 75.0°F
+2025/10/11 14:46:30 EVENT: Pool detected: ON
+2025/10/11 14:46:30 EVENT: Spa Light detected: OFF
+2025/10/11 14:46:30 EVENT: Pool Heat Pump detected: off
+2025/10/11 14:47:04 EVENT: Air temperature changed: 75.0°F → 76.0°F
+2025/10/11 14:47:15 EVENT: Spa Light turned ON
+2025/10/11 14:47:32 EVENT: Unknown equipment detected - Valve Motor (V0001) type=VALVE status=CLOSED
+```
+
+### Use Cases
+
+- **Debugging**: Watch equipment respond to commands in real-time
+- **Discovery**: Find all equipment in your IntelliCenter, including unknown types
+- **Monitoring**: Track circuit activation, temperature changes, and pump speed adjustments
+- **Testing**: Verify equipment changes are being reported correctly
+- **Development**: Understand equipment behavior before implementing specific support
+
+### Equipment Tracked
+
+Listen mode monitors all equipment types:
+- **Water & Air Temperatures**: Bodies and sensors
+- **Circuits**: Lights, pumps, valves, cleaners
+- **Features**: Spa jets, fountains, automation features
+- **Thermal Equipment**: Heaters and heat pumps with operational states
+- **Pumps**: Variable speed RPM changes
+- **Unknown Equipment**: Any equipment type not specifically implemented
 
 ## Usage
 

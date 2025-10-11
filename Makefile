@@ -21,8 +21,8 @@ GOMOD=$(GOCMD) mod
 
 .PHONY: all build build-static build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
 
-# Default target
-all: build
+# Default target - show help
+all: help
 
 # Build the binary
 build:

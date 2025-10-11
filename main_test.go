@@ -14,6 +14,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const (
+	testShowOnMenuValue = "1w" // Test value for SHOMNU parameter indicating feature should be shown
+)
+
 // Test helper to create a mock WebSocket server.
 func createMockWebSocketServer(t *testing.T, responses map[string]IntelliCenterResponse) *httptest.Server {
 	t.Helper()
@@ -55,7 +59,7 @@ func createMockWebSocketServer(t *testing.T, responses map[string]IntelliCenterR
 }
 
 func TestNewPoolMonitor(t *testing.T) {
-	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false)
+	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false, false)
 
 	if poolMonitor.intelliCenterURL != "ws://192.168.1.100:6680" {
 		t.Errorf("Expected URL ws://192.168.1.100:6680, got %s", poolMonitor.intelliCenterURL)
@@ -75,7 +79,7 @@ func TestNewPoolMonitor(t *testing.T) {
 }
 
 func TestNewPoolMonitorWithDebug(t *testing.T) {
-	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", true)
+	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", true, false)
 
 	if !poolMonitor.debugMode {
 		t.Error("Debug mode should be true")
@@ -83,7 +87,7 @@ func TestNewPoolMonitorWithDebug(t *testing.T) {
 }
 
 func TestCalculateBackoffDelay(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	tests := []struct {
 		attempt  int
@@ -115,7 +119,7 @@ func TestConnectWithValidServer(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	err := poolMonitor.Connect(ctx)
@@ -131,7 +135,7 @@ func TestConnectWithValidServer(t *testing.T) {
 }
 
 func TestConnectWithInvalidServer(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
 	// Reduce retry config for faster test execution
 	poolMonitor.retryConfig.MaxRetries = 1
 	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
@@ -148,7 +152,7 @@ func TestConnectWithInvalidServer(t *testing.T) {
 }
 
 func TestIsHealthyWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 	ctx := t.Context()
 
 	if poolMonitor.IsHealthy(ctx) {
@@ -194,7 +198,7 @@ func TestGetBodyTemperatures(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -242,7 +246,7 @@ func testAirTemperature(t *testing.T, probeValue string, shouldFail bool, errorM
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -293,7 +297,7 @@ func TestGetPumpData(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -341,7 +345,7 @@ func TestGetCircuitStatus(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -356,7 +360,7 @@ func TestGetCircuitStatus(t *testing.T) {
 }
 
 func TestIsValidCircuit(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	tests := []struct {
 		objName  string
@@ -381,7 +385,7 @@ func TestIsValidCircuit(t *testing.T) {
 }
 
 func TestGetBodyNameFromCircuit(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	tests := []struct {
 		circuitName string
@@ -405,7 +409,7 @@ func TestGetBodyNameFromCircuit(t *testing.T) {
 }
 
 func TestCalculateCircuitStatusValue(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 	poolMonitor.bodyHeatingStatus["pool"] = true
 	poolMonitor.bodyHeatingStatus["spa"] = false
 
@@ -469,7 +473,7 @@ func TestMessageIDMismatch(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -488,7 +492,7 @@ func TestMessageIDMismatch(t *testing.T) {
 }
 
 func TestProcessPumpObjectWithInvalidRPM(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	obj := ObjectData{
 		ObjName: "PUMP1",
@@ -506,7 +510,7 @@ func TestProcessPumpObjectWithInvalidRPM(t *testing.T) {
 }
 
 func TestProcessPumpObjectWithMissingData(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	obj := ObjectData{
 		ObjName: "PUMP1",
@@ -523,7 +527,7 @@ func TestProcessPumpObjectWithMissingData(t *testing.T) {
 }
 
 func TestValidateResponse(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	messageID := "test-message-123"
 	poolMonitor.pendingRequests[messageID] = time.Now()
@@ -562,7 +566,7 @@ func TestGetEnvOrDefault(t *testing.T) {
 
 func TestCreateMetricsHandler(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	handler := createMetricsHandler(registry, poolMonitor)
 	if handler == nil {
@@ -748,7 +752,7 @@ func TestGetTemperatures(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -763,7 +767,7 @@ func TestGetTemperatures(t *testing.T) {
 }
 
 func TestGetTemperaturesWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 	ctx := t.Context()
 
 	err := poolMonitor.GetTemperatures(ctx)
@@ -784,7 +788,7 @@ func TestEnsureConnected(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	// Test with no connection
@@ -805,7 +809,7 @@ func TestEnsureConnected(t *testing.T) {
 }
 
 func TestEnsureConnectedWithUnhealthyConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
 	// Reduce retry config for faster test execution
 	poolMonitor.retryConfig.MaxRetries = 1
 	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
@@ -833,7 +837,7 @@ func TestIsHealthyWithConnection(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -854,7 +858,7 @@ func TestIsHealthyWithConnection(t *testing.T) {
 }
 
 func TestIsHealthyWithFailedPing(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 	ctx := t.Context()
 
 	// Test without any connection
@@ -888,7 +892,7 @@ func TestStartTemperaturePollingShutdown(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 
 	// Create context that will be canceled
 	ctx, cancel := context.WithCancel(t.Context())
@@ -917,7 +921,7 @@ func TestStartTemperaturePollingShutdown(t *testing.T) {
 }
 
 func TestLogPumpUpdate(_ *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Test without debug mode
 	poolMonitor.logPumpUpdate("Test Pump", "PUMP1", 2400, "ON", time.Millisecond)
@@ -928,7 +932,7 @@ func TestLogPumpUpdate(_ *testing.T) {
 }
 
 func TestCloseWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	err := poolMonitor.Close()
 	if err != nil {
@@ -980,7 +984,7 @@ func TestRequestPumpDataAPIError(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1011,7 +1015,7 @@ func TestRequestCircuitDataAPIError(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1043,7 +1047,7 @@ func testAPIError(t *testing.T, condition, responseCode string, testFunc func(*P
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1071,7 +1075,7 @@ func TestGetAirTemperatureAPIError(t *testing.T) {
 
 func TestStartTemperaturePollingWithConnectionFailures(t *testing.T) {
 	// Test polling with continuous connection failures
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
 	// Reduce retry config for faster test execution
 	poolMonitor.retryConfig.MaxRetries = 1
 	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
@@ -1113,7 +1117,7 @@ func TestStartTemperaturePollingWithGetTemperaturesFailure(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
@@ -1186,7 +1190,7 @@ func TestGetTemperaturesPartialFailures(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1201,7 +1205,7 @@ func TestGetTemperaturesPartialFailures(t *testing.T) {
 }
 
 func TestIsHealthyPingFailure(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 	ctx := t.Context()
 
 	// Test case 1: nil connection should return false immediately
@@ -1252,7 +1256,7 @@ func TestGetBodyTemperaturesWithInvalidTemperature(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1272,7 +1276,7 @@ func TestGetAirTemperatureWithInvalidTemperature(t *testing.T) {
 }
 
 func TestConnectWithRetryContextCancellation(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
 	// Reduce retry config for faster test execution
 	poolMonitor.retryConfig.MaxRetries = 3
 	poolMonitor.retryConfig.BaseDelay = 50 * time.Millisecond
@@ -1299,7 +1303,7 @@ func TestConnectWithRetryContextCancellation(t *testing.T) {
 }
 
 func TestProcessCircuitObjectWithMissingFields(_ *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Test with missing name
 	obj := ObjectData{
@@ -1338,7 +1342,7 @@ func TestIsHealthyWithPingSuccess(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1366,31 +1370,42 @@ func TestMainCommandLineParsing(t *testing.T) {
 	}
 }
 
-func TestRequestPumpDataWriteError(t *testing.T) {
-	// Create server that immediately closes connection to cause write error
+func createImmediateCloseServer(t *testing.T) *httptest.Server {
+	t.Helper()
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(_ *http.Request) bool { return true },
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Fatalf("Failed to upgrade connection: %v", err)
 		}
-		// Close immediately to cause write error
+		// Close immediately to cause write/read error
 		conn.Close()
 	}))
-	defer server.Close()
+}
 
+func setupPoolMonitorWithServer(t *testing.T, server *httptest.Server) *PoolMonitor {
+	t.Helper()
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
+
+	return poolMonitor
+}
+
+func TestRequestPumpDataWriteError(t *testing.T) {
+	server := createImmediateCloseServer(t)
+	defer server.Close()
+
+	poolMonitor := setupPoolMonitorWithServer(t, server)
 	defer poolMonitor.Close()
 
 	// This should fail due to closed connection
@@ -1401,30 +1416,10 @@ func TestRequestPumpDataWriteError(t *testing.T) {
 }
 
 func TestRequestCircuitDataWriteError(t *testing.T) {
-	// Create server that immediately closes connection to cause write error
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		// Close immediately to cause write error
-		conn.Close()
-	}))
+	server := createImmediateCloseServer(t)
 	defer server.Close()
 
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
+	poolMonitor := setupPoolMonitorWithServer(t, server)
 	defer poolMonitor.Close()
 
 	// This should fail due to closed connection
@@ -1441,7 +1436,7 @@ func TestRequestPumpDataMessageIDMismatch(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1466,7 +1461,7 @@ func TestRequestCircuitDataMessageIDMismatch(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1484,11 +1479,11 @@ func TestRequestCircuitDataMessageIDMismatch(t *testing.T) {
 	}
 }
 
-func TestProcessFeatureObject(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+func TestProcessFeatureObject(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Test feature with SHOMNU ending in 'w' (should be shown)
-	poolMonitor.featureConfig["FTR01"] = "1w"
+	poolMonitor.featureConfig["FTR01"] = testShowOnMenuValue
 
 	obj := ObjectData{
 		ObjName: "FTR01",
@@ -1529,7 +1524,7 @@ func TestProcessFeatureObject(t *testing.T) {
 }
 
 func TestCalculateHeaterStatus(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	tests := []struct {
 		name     string
@@ -1609,7 +1604,7 @@ func TestCalculateHeaterStatus(t *testing.T) {
 }
 
 func TestCalculateHeaterStatusFromName(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Set up body heating status
 	poolMonitor.bodyHeatingStatus["pool"] = true
@@ -1658,17 +1653,17 @@ func TestCalculateHeaterStatusFromName(t *testing.T) {
 }
 
 func TestGetStatusDescription(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	tests := []struct {
-		status   int
 		expected string
+		status   int
 	}{
-		{0, "off"},
-		{1, "heating"},
-		{thermalStatusIdle, "idle"},
-		{thermalStatusCooling, "cooling"},
-		{99, "unknown"}, // Unknown status
+		{"off", 0},
+		{"heating", 1},
+		{"idle", thermalStatusIdle},
+		{"cooling", thermalStatusCooling},
+		{"unknown", 99}, // Unknown status
 	}
 
 	for _, test := range tests {
@@ -1713,7 +1708,7 @@ func TestGetThermalStatus(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true) // Enable debug mode
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true, false) // Enable debug mode
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1756,7 +1751,7 @@ func TestGetThermalStatusAPIError(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1797,7 +1792,7 @@ func TestLoadFeatureConfiguration(t *testing.T) {
 				map[string]interface{}{
 					"objnam": "FTR01",
 					"params": map[string]interface{}{
-						"SHOMNU": "1w",
+						"SHOMNU": testShowOnMenuValue,
 					},
 				},
 				map[string]interface{}{
@@ -1809,7 +1804,7 @@ func TestLoadFeatureConfiguration(t *testing.T) {
 				map[string]interface{}{
 					"objnam": "PUMP01", // Non-FTR object should be ignored
 					"params": map[string]interface{}{
-						"SHOMNU": "1w",
+						"SHOMNU": testShowOnMenuValue,
 					},
 				},
 			},
@@ -1824,7 +1819,7 @@ func TestLoadFeatureConfiguration(t *testing.T) {
 	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
 	ctx := t.Context()
 
 	if err := poolMonitor.Connect(ctx); err != nil {
@@ -1838,8 +1833,8 @@ func TestLoadFeatureConfiguration(t *testing.T) {
 	}
 
 	// Check that feature configuration was loaded
-	if poolMonitor.featureConfig["FTR01"] != "1w" {
-		t.Errorf("Expected FTR01 to have SHOMNU=1w, got %s", poolMonitor.featureConfig["FTR01"])
+	if poolMonitor.featureConfig["FTR01"] != testShowOnMenuValue {
+		t.Errorf("Expected FTR01 to have SHOMNU=%s, got %s", testShowOnMenuValue, poolMonitor.featureConfig["FTR01"])
 	}
 
 	if poolMonitor.featureConfig["FTR02"] != "0" {
@@ -1848,32 +1843,13 @@ func TestLoadFeatureConfiguration(t *testing.T) {
 }
 
 func TestLoadFeatureConfigurationError(t *testing.T) {
-	// Create server that returns error
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		// Close immediately to cause read error
-		conn.Close()
-	}))
+	server := createImmediateCloseServer(t)
 	defer server.Close()
 
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
+	poolMonitor := setupPoolMonitorWithServer(t, server)
 	defer poolMonitor.Close()
 
+	ctx := t.Context()
 	err := poolMonitor.LoadFeatureConfiguration(ctx)
 	if err == nil {
 		t.Error("Expected error due to connection failure")
@@ -1881,20 +1857,20 @@ func TestLoadFeatureConfigurationError(t *testing.T) {
 }
 
 func TestProcessConfigurationItem(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Test valid configuration item
 	item := map[string]interface{}{
 		"objnam": "FTR01",
 		"params": map[string]interface{}{
-			"SHOMNU": "1w",
+			"SHOMNU": testShowOnMenuValue,
 		},
 	}
 
 	poolMonitor.processConfigurationItem(item)
 
-	if poolMonitor.featureConfig["FTR01"] != "1w" {
-		t.Errorf("Expected FTR01 to have SHOMNU=1w, got %s", poolMonitor.featureConfig["FTR01"])
+	if poolMonitor.featureConfig["FTR01"] != testShowOnMenuValue {
+		t.Errorf("Expected FTR01 to have SHOMNU=%s, got %s", testShowOnMenuValue, poolMonitor.featureConfig["FTR01"])
 	}
 
 	// Test invalid items that should be handled gracefully
@@ -1903,13 +1879,13 @@ func TestProcessConfigurationItem(t *testing.T) {
 		map[string]interface{}{
 			// Missing objnam
 			"params": map[string]interface{}{
-				"SHOMNU": "1w",
+				"SHOMNU": testShowOnMenuValue,
 			},
 		},
 		map[string]interface{}{
 			"objnam": "PUMP01", // Not FTR prefix
 			"params": map[string]interface{}{
-				"SHOMNU": "1w",
+				"SHOMNU": testShowOnMenuValue,
 			},
 		},
 		map[string]interface{}{
@@ -1935,7 +1911,7 @@ func TestProcessConfigurationItem(t *testing.T) {
 }
 
 func TestProcessBodyHeatingStatusError(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
 
 	// Test with invalid HTMODE value
 	poolMonitor.processBodyHeatingStatus("Pool", "invalid", "BODY1")
@@ -1952,5 +1928,512 @@ func TestProcessBodyHeatingStatusError(t *testing.T) {
 	// Should still not have added anything
 	if _, exists := poolMonitor.bodyHeatingStatus["pool"]; exists {
 		t.Error("Should not have processed empty values")
+	}
+}
+
+// Listen mode tests
+func TestInitializeState(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	if poolMonitor.previousState != nil {
+		t.Error("previousState should be nil initially")
+	}
+
+	poolMonitor.initializeState()
+
+	if poolMonitor.previousState == nil {
+		t.Error("initializeState should create previousState")
+	}
+
+	if poolMonitor.previousState.WaterTemps == nil {
+		t.Error("WaterTemps map should be initialized")
+	}
+	if poolMonitor.previousState.PumpRPMs == nil {
+		t.Error("PumpRPMs map should be initialized")
+	}
+	if poolMonitor.previousState.Circuits == nil {
+		t.Error("Circuits map should be initialized")
+	}
+	if poolMonitor.previousState.Thermals == nil {
+		t.Error("Thermals map should be initialized")
+	}
+	if poolMonitor.previousState.Features == nil {
+		t.Error("Features map should be initialized")
+	}
+	if poolMonitor.previousState.UnknownEquip == nil {
+		t.Error("UnknownEquip map should be initialized")
+	}
+}
+
+func TestTrackWaterTempInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new equipment
+	poolMonitor.trackWaterTemp("Pool", 82.5)
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.WaterTemps["Pool"] != 82.5 {
+		t.Errorf("Expected Pool temp 82.5, got %v", poolMonitor.previousState.WaterTemps["Pool"])
+	}
+
+	// Second call with same temp - should not log change
+	poolMonitor.trackWaterTemp("Pool", 82.5)
+
+	// Third call with different temp - should log change
+	poolMonitor.trackWaterTemp("Pool", 83.0)
+	if poolMonitor.previousState.WaterTemps["Pool"] != 83.0 {
+		t.Errorf("Expected Pool temp 83.0, got %v", poolMonitor.previousState.WaterTemps["Pool"])
+	}
+}
+
+func TestTrackWaterTempNotInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
+
+	poolMonitor.trackWaterTemp("Pool", 82.5)
+
+	// Should not initialize state when not in listen mode
+	if poolMonitor.previousState != nil {
+		t.Error("previousState should not be initialized when not in listen mode")
+	}
+}
+
+func TestTrackAirTempInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new temperature
+	poolMonitor.trackAirTemp(75.0)
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.AirTemp != 75.0 {
+		t.Errorf("Expected air temp 75.0, got %v", poolMonitor.previousState.AirTemp)
+	}
+
+	// Second call with same temp - should not log change
+	poolMonitor.trackAirTemp(75.0)
+
+	// Third call with different temp - should log change
+	poolMonitor.trackAirTemp(76.0)
+	if poolMonitor.previousState.AirTemp != 76.0 {
+		t.Errorf("Expected air temp 76.0, got %v", poolMonitor.previousState.AirTemp)
+	}
+}
+
+func TestTrackPumpRPMInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new pump
+	poolMonitor.trackPumpRPM("Pool Pump", 2400)
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.PumpRPMs["Pool Pump"] != 2400 {
+		t.Errorf("Expected Pool Pump RPM 2400, got %v", poolMonitor.previousState.PumpRPMs["Pool Pump"])
+	}
+
+	// Second call with changed RPM - should log change
+	poolMonitor.trackPumpRPM("Pool Pump", 2600)
+	if poolMonitor.previousState.PumpRPMs["Pool Pump"] != 2600 {
+		t.Errorf("Expected Pool Pump RPM 2600, got %v", poolMonitor.previousState.PumpRPMs["Pool Pump"])
+	}
+}
+
+func TestTrackCircuitInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new circuit
+	poolMonitor.trackCircuit("Pool Light", "OFF")
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.Circuits["Pool Light"] != "OFF" {
+		t.Errorf("Expected Pool Light status OFF, got %v", poolMonitor.previousState.Circuits["Pool Light"])
+	}
+
+	// Second call with changed status - should log change
+	poolMonitor.trackCircuit("Pool Light", "ON")
+	if poolMonitor.previousState.Circuits["Pool Light"] != "ON" {
+		t.Errorf("Expected Pool Light status ON, got %v", poolMonitor.previousState.Circuits["Pool Light"])
+	}
+}
+
+func TestTrackThermalInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new thermal equipment
+	poolMonitor.trackThermal("Pool Heater", thermalStatusOff)
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.Thermals["Pool Heater"] != thermalStatusOff {
+		t.Errorf("Expected Pool Heater status off, got %v", poolMonitor.previousState.Thermals["Pool Heater"])
+	}
+
+	// Second call with changed status - should log change
+	poolMonitor.trackThermal("Pool Heater", thermalStatusHeating)
+	if poolMonitor.previousState.Thermals["Pool Heater"] != thermalStatusHeating {
+		t.Errorf("Expected Pool Heater status heating, got %v", poolMonitor.previousState.Thermals["Pool Heater"])
+	}
+}
+
+func TestTrackFeatureInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// First call - should detect new feature
+	poolMonitor.trackFeature("Spa Jets", "OFF")
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.Features["Spa Jets"] != "OFF" {
+		t.Errorf("Expected Spa Jets status OFF, got %v", poolMonitor.previousState.Features["Spa Jets"])
+	}
+
+	// Second call with changed status - should log change
+	poolMonitor.trackFeature("Spa Jets", "ON")
+	if poolMonitor.previousState.Features["Spa Jets"] != "ON" {
+		t.Errorf("Expected Spa Jets status ON, got %v", poolMonitor.previousState.Features["Spa Jets"])
+	}
+}
+
+func TestGetAllObjects(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "BODY1",
+					Params: map[string]string{
+						"SNAME":  "Pool",
+						"STATUS": "ON",
+						"OBJTYP": "BODY",
+						"SUBTYP": "POOL",
+					},
+				},
+				{
+					ObjName: "VALVE1",
+					Params: map[string]string{
+						"SNAME":  "Pool Valve",
+						"STATUS": "OPEN",
+						"OBJTYP": "VALVE",
+						"SUBTYP": "ACTUATOR",
+					},
+				},
+			},
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, true)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	// Initialize state for tracking
+	poolMonitor.initializeState()
+
+	err := poolMonitor.getAllObjects()
+	if err != nil {
+		t.Fatalf("getAllObjects failed: %v", err)
+	}
+
+	// Check that unknown equipment was tracked
+	if _, exists := poolMonitor.previousState.UnknownEquip["VALVE1"]; !exists {
+		t.Error("VALVE1 should be tracked as unknown equipment")
+	}
+}
+
+func TestGetAllObjectsAPIError(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:": {
+			Command:  "GetParamList",
+			Response: "500",
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, true)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.getAllObjects()
+	if err == nil {
+		t.Error("Expected error for API response 500")
+	}
+}
+
+func TestTrackUnknownEquipment(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+	poolMonitor.initializeState()
+
+	tests := []struct {
+		name        string
+		obj         ObjectData
+		shouldTrack bool
+	}{
+		{
+			name: "VALVE - should track",
+			obj: ObjectData{
+				ObjName: "VALVE1",
+				Params: map[string]string{
+					"SNAME":  "Pool Valve",
+					"STATUS": "OPEN",
+					"OBJTYP": "VALVE",
+					"SUBTYP": "ACTUATOR",
+				},
+			},
+			shouldTrack: true,
+		},
+		{
+			name: "BODY - should not track (known type)",
+			obj: ObjectData{
+				ObjName: "BODY1",
+				Params: map[string]string{
+					"SNAME":  "Pool",
+					"STATUS": "ON",
+					"OBJTYP": "BODY",
+				},
+			},
+			shouldTrack: false,
+		},
+		{
+			name: "Internal object - should not track",
+			obj: ObjectData{
+				ObjName: "_SYS01",
+				Params: map[string]string{
+					"SNAME":  "System",
+					"STATUS": "ON",
+					"OBJTYP": "SYSTEM",
+				},
+			},
+			shouldTrack: false,
+		},
+		{
+			name: "No OBJTYP - should not track",
+			obj: ObjectData{
+				ObjName: "OBJ1",
+				Params: map[string]string{
+					"SNAME":  "Some Object",
+					"STATUS": "ON",
+				},
+			},
+			shouldTrack: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			poolMonitor.trackUnknownEquipment(test.obj)
+
+			_, tracked := poolMonitor.previousState.UnknownEquip[test.obj.ObjName]
+			if tracked != test.shouldTrack {
+				t.Errorf("Expected tracked=%v, got %v", test.shouldTrack, tracked)
+			}
+		})
+	}
+}
+
+func TestTrackUnknownEquipmentNotInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, false)
+
+	obj := ObjectData{
+		ObjName: "VALVE1",
+		Params: map[string]string{
+			"SNAME":  "Pool Valve",
+			"STATUS": "OPEN",
+			"OBJTYP": "VALVE",
+		},
+	}
+
+	poolMonitor.trackUnknownEquipment(obj)
+
+	// Should not initialize state when not in listen mode
+	if poolMonitor.previousState != nil {
+		t.Error("previousState should not be initialized when not in listen mode")
+	}
+}
+
+func TestLogUnknownEquipmentDetected(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// Test with name
+	poolMonitor.logUnknownEquipmentDetected("Pool Valve", "VALVE1", "VALVE", "OPEN")
+
+	// Test without name
+	poolMonitor.logUnknownEquipmentDetected("", "VALVE2", "VALVE", "CLOSED")
+}
+
+func TestLogUnknownEquipmentChanged(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false, true)
+
+	// Test with name
+	poolMonitor.logUnknownEquipmentChanged("Pool Valve", "VALVE1", "VALVE:OPEN", "VALVE:CLOSED")
+
+	// Test without name
+	poolMonitor.logUnknownEquipmentChanged("", "VALVE2", "VALVE:CLOSED", "VALVE:OPEN")
+}
+
+func TestListenModeIntegration(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=BODY": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "BODY1",
+					Params: map[string]string{
+						"SNAME":  "Pool",
+						"TEMP":   "82.5",
+						"SUBTYP": "POOL",
+						"STATUS": "ON",
+						"HTMODE": "1",
+					},
+				},
+			},
+		},
+		"GetParamList:": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "_A135",
+					Params: map[string]string{
+						"SNAME":  "Air Sensor",
+						"PROBE":  "75.2",
+						"SUBTYP": "AIR",
+						"STATUS": "ON",
+					},
+				},
+				{
+					ObjName: "VALVE1",
+					Params: map[string]string{
+						"SNAME":  "Pool Valve",
+						"STATUS": "OPEN",
+						"OBJTYP": "VALVE",
+						"SUBTYP": "ACTUATOR",
+					},
+				},
+			},
+		},
+		"GetParamList:OBJTYP=PUMP": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "PUMP1",
+					Params: map[string]string{
+						"SNAME":  "Pool Pump",
+						"RPM":    "2400",
+						"STATUS": "ON",
+					},
+				},
+			},
+		},
+		"GetParamList:OBJTYP=CIRCUIT": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "C01",
+					Params: map[string]string{
+						"SNAME":  "Pool Light",
+						"STATUS": "ON",
+						"OBJTYP": "CIRCUIT",
+						"SUBTYP": "LIGHT",
+					},
+				},
+			},
+		},
+		"GetParamList:OBJTYP=HEATER": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "HTR01",
+					Params: map[string]string{
+						"SNAME":  "Pool Heater",
+						"STATUS": "ON",
+						"SUBTYP": "THERMAL",
+					},
+				},
+			},
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, true)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	// First call - should detect all equipment
+	err := poolMonitor.GetTemperatures(ctx)
+	if err != nil {
+		t.Fatalf("First GetTemperatures failed: %v", err)
+	}
+
+	// Verify state was tracked
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	if poolMonitor.previousState.WaterTemps["Pool"] != 82.5 {
+		t.Error("Pool temperature should be tracked")
+	}
+
+	if poolMonitor.previousState.AirTemp != 75.2 {
+		t.Error("Air temperature should be tracked")
+	}
+
+	if poolMonitor.previousState.PumpRPMs["Pool Pump"] != 2400 {
+		t.Error("Pool Pump RPM should be tracked")
+	}
+
+	if poolMonitor.previousState.Circuits["Pool Light"] != "ON" {
+		t.Error("Pool Light should be tracked")
+	}
+
+	// Second call - should not log anything (no changes)
+	err = poolMonitor.GetTemperatures(ctx)
+	if err != nil {
+		t.Fatalf("Second GetTemperatures failed: %v", err)
 	}
 }
