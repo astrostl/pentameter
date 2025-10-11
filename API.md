@@ -251,6 +251,50 @@ The `GetParamList` command retrieves current operational data for monitoring.
 
 ## Advanced Topics
 
+### Universal Equipment Discovery
+
+**Discover All Equipment (No Filters):**
+
+Query all objects in the system without filtering by type - useful for equipment discovery, debugging, and monitoring unknown equipment types.
+
+```json
+{
+  "messageID": "all-objects-001",
+  "command": "GetParamList",
+  "condition": "",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "OBJTYP", "SUBTYP"]}]
+}
+```
+
+**Response includes:**
+- **All equipment types**: BODY, CIRCUIT, PUMP, HEATER, SENSE, VALVE, etc.
+- **OBJTYP**: Object type classification (primary identifier)
+- **SUBTYP**: Subtype within object class (POOL, SPA, LIGHT, ULTRA, etc.)
+- **SNAME**: User-configured display name
+- **STATUS**: Current operational status
+
+**Use Cases:**
+- **Equipment discovery**: Find all equipment in the system including unknown types
+- **Live monitoring**: Track equipment changes across the entire system (listen mode)
+- **Debugging**: Identify equipment types and naming conventions
+- **Universal compatibility**: Works with any IntelliCenter configuration
+
+**Performance Considerations:**
+- Returns ~35+ objects including virtual controls and unused circuits
+- Filter results by OBJTYP/SUBTYP or object naming patterns (C####, FTR##, etc.)
+- Suitable for discovery and debugging, not continuous high-frequency polling
+- For production monitoring, use targeted OBJTYP queries for better performance
+
+**Known Equipment Types:**
+- **BODY**: Pool/Spa water bodies
+- **CIRCUIT**: Equipment controls (lights, valves, features)
+- **PUMP**: Variable speed pumps
+- **HEATER**: Heating/cooling equipment
+- **SENSE**: Temperature sensors
+- **VALVE**: Valve actuators
+- **CHEM**: Chemical monitoring equipment
+- **REMOTE**: Remote control devices
+
 ### Temperature Sensor Discovery
 
 **Discover All Sensors:**
