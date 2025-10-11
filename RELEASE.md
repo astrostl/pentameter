@@ -1,5 +1,9 @@
 # Release Checklist
 
+**⚠️ CRITICAL: STOP IMMEDIATELY IF ANY STEP FAILS ⚠️**
+
+If any command returns an error or fails quality checks, STOP the release process immediately. Fix the issue, commit the fix, and restart from step 1.
+
 Follow these steps to cut a new release:
 
 1. **Update Documentation**
