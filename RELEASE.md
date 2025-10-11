@@ -9,30 +9,34 @@ Follow these steps to cut a new release:
    - Update `API.md`: Document any new IntelliCenter API findings or endpoint discoveries (if applicable)
    - **Commit documentation changes**: `git add CHANGELOG.md README.md CLAUDE.md API.md && git commit -m "Update documentation for vX.X.X release" && git push`
 
-2. **Ensure Clean Working Directory**
+2. **Run Quality Checks**
+   - Execute `make quality-comprehensive` to ensure all checks pass with maximum linter coverage before release
+
+3. **Build Binary**
+   - Run `make build` to create a clean production binary
+   - Verify the build completes successfully without errors
+
+4. **Ensure Clean Working Directory**
    - Run `git status` to verify no uncommitted changes (version will show as "-dirty" otherwise)
    - If any uncommitted changes exist, use `git stash` to temporarily store them
 
-3. **Run Quality Checks**
-   - Execute `make quality-comprehensive` to ensure all checks pass with maximum linter coverage before release
-
-4. **Create Release Tag**
+5. **Create Release Tag**
    - Create version tag: `git tag vX.X.X`
    - Push tag to trigger release process: `git push origin vX.X.X`
 
-5. **Build and Push Multi-Platform Docker Images**
+6. **Build and Push Multi-Platform Docker Images**
    - Run: `make docker-push`
    - This automatically builds AMD64 and ARM64 images, pushes them to DockerHub, and creates multi-platform manifests
 
-6. **Build Homebrew Assets**
+7. **Build Homebrew Assets**
    - Run: `make build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula`
    - This generates binaries and checksums in `dist/` directory
 
-7. **Create GitHub Release**
+8. **Create GitHub Release**
    - Use `gh release create` with generated assets from `dist/`
    - Include release notes from CHANGELOG.md
 
-8. **Verify Homebrew Formula**
+9. **Verify Homebrew Formula**
    - Push updated Formula/pentameter.rb with correct SHA256 checksums
    - Test with `brew upgrade` to ensure no checksum mismatches
 

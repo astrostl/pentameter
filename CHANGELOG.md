@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-10-11
+
 ### Added
 - Listen mode (`--listen` flag) for live equipment change monitoring with rapid polling
 - Real-time event logging showing initial equipment state and all changes
