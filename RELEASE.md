@@ -7,9 +7,11 @@ Follow these steps to cut a new release:
    - Update `README.md`: Reflect any new features, configuration changes, or installation updates
    - Update `CLAUDE.md`: Document any process changes, new development patterns, or architectural updates
    - Update `API.md`: Document any new IntelliCenter API findings or endpoint discoveries (if applicable)
+   - **Commit documentation changes**: `git add CHANGELOG.md README.md CLAUDE.md API.md && git commit -m "Update documentation for vX.X.X release" && git push`
 
 2. **Ensure Clean Working Directory**
    - Run `git status` to verify no uncommitted changes (version will show as "-dirty" otherwise)
+   - If any uncommitted changes exist, use `git stash` to temporarily store them
 
 3. **Run Quality Checks**
    - Execute `make quality-comprehensive` to ensure all checks pass with maximum linter coverage before release
