@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	testShowOnMenuValue = "1w" // Test value for SHOMNU parameter indicating feature should be shown
+	testShowOnMenuValue = "1w"     // Test value for SHOMNU parameter indicating feature should be shown.
+	testStatusOff       = "OFF"    // Test circuit/feature off status.
+	testStatusOn        = statusOn // Test circuit/feature on status (uses main.go constant).
 )
 
 // Test helper to create a mock WebSocket server.
@@ -1738,31 +1740,9 @@ func TestGetThermalStatus(t *testing.T) {
 }
 
 func TestGetThermalStatusAPIError(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=HEATER": {
-			Command:  "GetParamList",
-			Response: "500", // API error
-		},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getThermalStatus()
-	if err == nil {
-		t.Error("Expected error for API response 500")
-	}
+	testAPIError(t, "GetParamList:OBJTYP=HEATER", "500", func(pm *PoolMonitor) error {
+		return pm.getThermalStatus()
+	})
 }
 
 func TestLoadFeatureConfiguration(t *testing.T) {
@@ -1931,7 +1911,7 @@ func TestProcessBodyHeatingStatusError(t *testing.T) {
 	}
 }
 
-// Listen mode tests
+// Listen mode tests.
 func TestInitializeState(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false, true)
 
@@ -2049,19 +2029,19 @@ func TestTrackCircuitInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false, true)
 
 	// First call - should detect new circuit
-	poolMonitor.trackCircuit("Pool Light", "OFF")
+	poolMonitor.trackCircuit("Pool Light", testStatusOff)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
 	}
 
-	if poolMonitor.previousState.Circuits["Pool Light"] != "OFF" {
+	if poolMonitor.previousState.Circuits["Pool Light"] != testStatusOff {
 		t.Errorf("Expected Pool Light status OFF, got %v", poolMonitor.previousState.Circuits["Pool Light"])
 	}
 
 	// Second call with changed status - should log change
-	poolMonitor.trackCircuit("Pool Light", "ON")
-	if poolMonitor.previousState.Circuits["Pool Light"] != "ON" {
+	poolMonitor.trackCircuit("Pool Light", testStatusOn)
+	if poolMonitor.previousState.Circuits["Pool Light"] != testStatusOn {
 		t.Errorf("Expected Pool Light status ON, got %v", poolMonitor.previousState.Circuits["Pool Light"])
 	}
 }
@@ -2091,19 +2071,19 @@ func TestTrackFeatureInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false, true)
 
 	// First call - should detect new feature
-	poolMonitor.trackFeature("Spa Jets", "OFF")
+	poolMonitor.trackFeature("Spa Jets", testStatusOff)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
 	}
 
-	if poolMonitor.previousState.Features["Spa Jets"] != "OFF" {
+	if poolMonitor.previousState.Features["Spa Jets"] != testStatusOff {
 		t.Errorf("Expected Spa Jets status OFF, got %v", poolMonitor.previousState.Features["Spa Jets"])
 	}
 
 	// Second call with changed status - should log change
-	poolMonitor.trackFeature("Spa Jets", "ON")
-	if poolMonitor.previousState.Features["Spa Jets"] != "ON" {
+	poolMonitor.trackFeature("Spa Jets", testStatusOn)
+	if poolMonitor.previousState.Features["Spa Jets"] != testStatusOn {
 		t.Errorf("Expected Spa Jets status ON, got %v", poolMonitor.previousState.Features["Spa Jets"])
 	}
 }
@@ -2165,31 +2145,9 @@ func TestGetAllObjects(t *testing.T) {
 }
 
 func TestGetAllObjectsAPIError(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:": {
-			Command:  "GetParamList",
-			Response: "500",
-		},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, true)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getAllObjects()
-	if err == nil {
-		t.Error("Expected error for API response 500")
-	}
+	testAPIError(t, "GetParamList:", "500", func(pm *PoolMonitor) error {
+		return pm.getAllObjects()
+	})
 }
 
 func TestTrackUnknownEquipment(t *testing.T) {
