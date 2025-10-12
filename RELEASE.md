@@ -45,11 +45,11 @@ git push origin v0.X.X
 Build images for both AMD64 and ARM64 architectures:
 
 ```bash
-# Build AMD64 image
-docker build --platform linux/amd64 -t astrostl/pentameter:latest-amd64 -t astrostl/pentameter:v0.X.X-amd64 .
+# Build AMD64 image with version
+docker build --platform linux/amd64 --build-arg VERSION=v0.X.X -t astrostl/pentameter:latest-amd64 -t astrostl/pentameter:v0.X.X-amd64 .
 
-# Build ARM64 image
-docker build --platform linux/arm64 -t astrostl/pentameter:latest-arm64 -t astrostl/pentameter:v0.X.X-arm64 .
+# Build ARM64 image with version
+docker build --platform linux/arm64 --build-arg VERSION=v0.X.X -t astrostl/pentameter:latest-arm64 -t astrostl/pentameter:v0.X.X-arm64 .
 
 # Push all images
 docker push astrostl/pentameter:latest-amd64
@@ -58,7 +58,9 @@ docker push astrostl/pentameter:latest-arm64
 docker push astrostl/pentameter:v0.X.X-arm64
 ```
 
-**CRITICAL:** Do NOT use `make docker-push` initially, as it depends on a local `pentameter:latest` image that may not exist. Build images manually first.
+**CRITICAL:**
+- The `--build-arg VERSION=v0.X.X` is REQUIRED to inject the version into the Docker image. Without it, the binary will show "pentameter dev" instead of the correct version.
+- Do NOT use `make docker-push` initially, as it depends on a local `pentameter:latest` image that may not exist. Build images manually first.
 
 ### Step 3: Create Multi-Platform Manifests
 
@@ -251,6 +253,18 @@ If you get a SHA256 mismatch error:
 **Cause:** The Makefile target expects a local `pentameter:latest` image to exist.
 
 **Solution:** Don't use `make docker-push` for releases. Build images manually using `docker build` commands as shown in Step 2.
+
+### Issue: Docker Image Shows "pentameter dev" Instead of Version
+
+**Cause:** Docker images were built without the `--build-arg VERSION=v0.X.X` flag.
+
+**Solution:**
+1. Rebuild Docker images with the `--build-arg VERSION=v0.X.X` flag (see Step 2)
+2. Push the corrected images
+3. Recreate the multi-platform manifests
+4. Verify: `docker run --rm astrostl/pentameter:v0.X.X --version` should show `pentameter v0.X.X`
+
+**Why this happens:** The `.dockerignore` excludes the `.git` directory, so the Dockerfile can't run `git describe` to get the version. The version must be passed in from outside where git is available.
 
 ## Post-Release Verification
 
