@@ -389,7 +389,6 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-
 	// Validate response correlation
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
@@ -488,7 +487,6 @@ func (pm *PoolMonitor) processHeaterAssignment(
 		LoTemp:    lotmp,
 		HiTemp:    hitmp,
 	}
-
 }
 
 func (pm *PoolMonitor) getAirTemperature() error {
@@ -958,11 +956,9 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 		log.Printf("WARNING: Suspiciously fast pump data response (%v) - possible cached data", responseTime)
 	}
 
-
 	if resp.Response != "200" {
 		return nil, 0, fmt.Errorf("pump data API request failed with response: %s", resp.Response)
 	}
-
 
 	return &resp, responseTime, nil
 }

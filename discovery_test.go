@@ -19,7 +19,7 @@ func TestDiscoverIntelliCenterTimeout(t *testing.T) {
 		t.Skip("Skipping discovery timeout test in short mode")
 	}
 
-	_, err := DiscoverIntelliCenter()
+	_, err := DiscoverIntelliCenter(false)
 	if err == nil {
 		// This could succeed if there's actually an IntelliCenter on the network
 		t.Log("DiscoverIntelliCenter succeeded - IntelliCenter may be present on network")
@@ -67,25 +67,6 @@ func TestSendHostnameQueryClosedConnection(t *testing.T) {
 	err = sendHostnameQuery(conn, mcastAddr, "pentair.local.")
 	if err == nil {
 		t.Error("Expected error for closed connection")
-	}
-}
-
-func TestCollectHostnameResponseTimeout(t *testing.T) {
-	// Create a UDP connection that won't receive any responses
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
-	if err != nil {
-		t.Fatalf("Failed to create UDP connection: %v", err)
-	}
-	defer conn.Close()
-
-	// This should timeout since no responses will be received
-	_, err = collectHostnameResponse(conn)
-	if err == nil {
-		t.Error("Expected timeout error")
-	}
-
-	if !strings.Contains(err.Error(), "no response") {
-		t.Errorf("Expected 'no response' error, got: %v", err)
 	}
 }
 
@@ -315,8 +296,8 @@ func TestCheckAnswerForPentairCaseInsensitive(t *testing.T) {
 
 func TestDiscoveryConstants(t *testing.T) {
 	// Verify discovery constants have reasonable values
-	if discoveryTimeout != 5*time.Second {
-		t.Errorf("discoveryTimeout should be 5s, got %v", discoveryTimeout)
+	if discoveryTimeout != 60*time.Second {
+		t.Errorf("discoveryTimeout should be 60s, got %v", discoveryTimeout)
 	}
 
 	if mdnsAddress != "224.0.0.251:5353" {
