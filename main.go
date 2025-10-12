@@ -322,11 +322,9 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 	}
 
 	// Get thermal equipment status
-	pm.logIfNotListeningf("DEBUG: About to call getThermalStatus()")
 	if err := pm.getThermalStatus(); err != nil {
 		return fmt.Errorf("failed to get thermal status: %w", err)
 	}
-	pm.logIfNotListeningf("DEBUG: getThermalStatus() completed successfully")
 
 	// In listen mode, query ALL objects to discover unknown equipment
 	if pm.listenMode {
@@ -377,9 +375,6 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 
 	// Track pending request
 	pm.pendingRequests[messageID] = sentTime
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Sending body temp request with messageID: %s", messageID)
-	}
 
 	// Send request
 	if err := pm.conn.WriteJSON(req); err != nil {
@@ -394,9 +389,6 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Received body temp response with messageID: %s (sent: %s)", resp.MessageID, messageID)
-	}
 
 	// Validate response correlation
 	if resp.MessageID != messageID {
@@ -408,9 +400,6 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 
 	// Clean up pending request
 	pm.validateResponse(messageID)
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Body temp messageID correlation successful: %s", messageID)
-	}
 
 	if resp.Response != "200" {
 		return nil, fmt.Errorf("API request failed with response: %s", resp.Response)
@@ -500,9 +489,6 @@ func (pm *PoolMonitor) processHeaterAssignment(
 		HiTemp:    hitmp,
 	}
 
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Body %s (%s) references heater %s with HTMODE=%d", name, objName, htsrc, htmode)
-	}
 }
 
 func (pm *PoolMonitor) getAirTemperature() error {
@@ -593,7 +579,6 @@ func (pm *PoolMonitor) getPumpData() error {
 }
 
 func (pm *PoolMonitor) getCircuitStatus() error {
-	pm.logIfNotListeningf("DEBUG: getCircuitStatus() starting")
 	resp, err := pm.requestCircuitData()
 	if err != nil {
 		return err
@@ -604,7 +589,6 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 		pm.processCircuitObject(obj)
 	}
 
-	pm.logIfNotListeningf("DEBUG: getCircuitStatus() completed successfully")
 	return nil
 }
 
@@ -766,10 +750,6 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string) flo
 
 func (pm *PoolMonitor) getThermalStatus() error {
 	// Process all heaters, not just referenced ones
-	pm.logIfNotListeningf("DEBUG: getThermalStatus() called - Processing all thermal equipment")
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Debug mode is enabled, referenced heaters: %d", len(pm.referencedHeaters))
-	}
 
 	// Query all heaters, not just referenced ones
 
@@ -790,9 +770,6 @@ func (pm *PoolMonitor) getThermalStatus() error {
 	}
 
 	pm.pendingRequests[messageID] = sentTime
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Sending thermal status request for all thermal devices")
-	}
 
 	if err := pm.conn.WriteJSON(req); err != nil {
 		delete(pm.pendingRequests, messageID)
@@ -954,9 +931,6 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 	}
 
 	pm.pendingRequests[messageID] = sentTime
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Sending pump data request with messageID: %s", messageID)
-	}
 
 	if err := pm.conn.WriteJSON(req); err != nil {
 		delete(pm.pendingRequests, messageID)
@@ -970,9 +944,6 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 	}
 
 	responseTime := time.Since(sentTime)
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Received pump data response with messageID: %s (sent: %s) in %v", resp.MessageID, messageID, responseTime)
-	}
 
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
@@ -987,17 +958,11 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 		log.Printf("WARNING: Suspiciously fast pump data response (%v) - possible cached data", responseTime)
 	}
 
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Pump data messageID correlation successful: %s", messageID)
-	}
 
 	if resp.Response != "200" {
 		return nil, 0, fmt.Errorf("pump data API request failed with response: %s", resp.Response)
 	}
 
-	if pm.debugMode {
-		pm.logIfNotListeningf("DEBUG: Raw pump response data: %+v", resp.ObjectList)
-	}
 
 	return &resp, responseTime, nil
 }
@@ -1024,11 +989,9 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 }
 
 func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status string, responseTime time.Duration) {
-	if pm.debugMode {
 		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
 	} else {
 		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s)", name, objName, rpm, status)
-	}
 }
 
 func (pm *PoolMonitor) IsHealthy(_ context.Context) bool {
