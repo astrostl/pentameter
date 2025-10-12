@@ -254,6 +254,7 @@ Pentameter can automatically discover your IntelliCenter on the local network us
 - When `--ic-ip` is not provided, pentameter automatically searches for `pentair.local` via mDNS
 - Discovery timeout is 60 seconds with progress indicators every 2 seconds
 - Works on most home networks without additional configuration
+- **Docker support**: Auto-discovery works in Docker using host networking (enabled by default)
 
 **Test discovery:**
 ```bash
@@ -274,11 +275,21 @@ export PENTAMETER_IC_IP=192.168.1.100
 pentameter
 ```
 
+**Docker auto-discovery:**
+```bash
+# Docker Compose with auto-discovery (default behavior)
+docker compose up -d
+
+# Docker run with auto-discovery
+docker run -d --name pentameter --network host astrostl/pentameter:latest
+```
+
 **Troubleshooting:**
 - If auto-discovery fails, pentameter provides clear guidance on using the `--ic-ip` flag
 - Check that your IntelliCenter is on the same network
 - Some networks may block mDNS multicast traffic (port 5353/UDP)
 - Firewalls may need to allow multicast traffic to 224.0.0.251:5353
+- **Docker**: Host networking is required for mDNS (enabled by default in docker-compose.yml)
 - Use `--ic-ip` flag to manually specify IP address if auto-discovery doesn't work
 
 ## Listen Mode - Live Equipment Monitoring
@@ -603,8 +614,20 @@ docker run -d \
 ### Docker Image Details
 - **Base Image**: `scratch` (minimal ~12MB image)
 - **Multi-stage build**: Go compilation in `golang:1.24-alpine`, final binary in scratch
+- **Networking**: Host networking mode for mDNS auto-discovery support
 - **Health Check**: Built-in health check endpoint at `/health`
 - **Restart Policy**: `unless-stopped` for automatic recovery
+
+### Network Configuration
+
+The `pentameter-app` service uses host networking (`network_mode: "host"`) to enable mDNS auto-discovery:
+
+- **Auto-Discovery**: Allows pentameter to find IntelliCenter via `pentair.local` multicast DNS
+- **Why Host Networking**: Docker's default bridge network doesn't forward multicast traffic required for mDNS
+- **Security**: Appropriate for local network monitoring tools that need direct network access
+- **Performance**: Eliminates NAT overhead for WebSocket connections
+
+Prometheus and Grafana remain on the bridge network (`pentameter-net`) and connect to pentameter via localhost.
 
 ## Prometheus Integration
 

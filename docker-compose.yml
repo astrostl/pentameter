@@ -3,8 +3,7 @@ services:
     image: astrostl/pentameter:latest
     container_name: pentameter-app
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    network_mode: "host"
     environment:
       - PENTAMETER_IC_IP=${PENTAMETER_IC_IP:-}
       - PENTAMETER_IC_PORT=${PENTAMETER_IC_PORT:-6680}
@@ -17,8 +16,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    networks:
-      - pentameter-net
 
   pentameter-prometheus:
     image: prom/prometheus:latest

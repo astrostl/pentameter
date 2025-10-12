@@ -272,9 +272,37 @@ The formula provides helpful error messages for non-macOS platforms directing us
 
 ## Docker Development - CRITICAL SECTION
 
-**⚠️ DOCKER BUILD CACHING IS SEVERELY PROBLEMATIC ⚠️** 
+**⚠️ DOCKER BUILD CACHING IS SEVERELY PROBLEMATIC ⚠️**
 
 Docker frequently fails to detect Go source changes and runs stale binaries. ALWAYS use Makefile targets which implement nuclear rebuild strategies.
+
+### Network Configuration
+
+**Host Networking is the Default:**
+
+The pentameter-app service uses `network_mode: "host"` for several important reasons:
+
+1. **mDNS Auto-Discovery**: Enables pentameter to discover IntelliCenter via mDNS (`pentair.local`)
+   - Docker's default bridge network doesn't forward multicast traffic
+   - mDNS requires multicast DNS packets on the local network
+   - Host networking gives direct access to the physical network
+
+2. **No Performance Overhead**: Eliminates NAT translation layer for WebSocket connections
+
+3. **Simpler Debugging**: Network traffic appears as if running natively on host
+
+4. **Security is Not a Concern**: Pentameter is a local network monitoring tool, not a public service
+   - Already requires local network access to communicate with IntelliCenter
+   - Not handling untrusted data or exposed to the internet
+   - Security boundary is "can talk to local network" which is inherently required
+
+**Why This Works:**
+- Pentameter is single-purpose: monitor pool equipment on local network
+- Not a multi-tenant system (no port conflicts expected)
+- Not a public-facing service (no external attack surface)
+- Deployed on single host monitoring single IntelliCenter
+
+**Prometheus and Grafana**: These services remain on the bridge network (`pentameter-net`) since they don't need mDNS access and benefit from network isolation. They connect to pentameter via localhost on the host network.
 
 ### After ANY Code Changes - MANDATORY STEPS:
 
