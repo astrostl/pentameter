@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2025-10-11
+
+### Fixed
+- **mDNS auto-discovery now works in Docker containers** - Explicitly selects network interface instead of relying on default interface selection
+- Auto-discovery reliability improved across different network configurations (macOS, Linux, Docker)
+- Discovery process shows which network interface is selected for better debugging
+
+### Changed
+- **Docker networking now uses host mode for pentameter-app** - Enables mDNS multicast traffic for IntelliCenter auto-discovery
+- Prometheus and Grafana services remain on bridge network for isolation
+- Eliminates need for manual IP configuration when running pentameter in Docker with host networking
+
+### Documentation
+- Added comprehensive network configuration explanation in CLAUDE.md
+- Updated README.md with Docker auto-discovery examples and troubleshooting
+- Enhanced RELEASE.md to prevent Homebrew formula checksum confusion
+- Documented mDNS interface selection behavior and Docker host networking rationale
+
 ## [0.3.1] - 2025-10-11
 
 ### Changed
