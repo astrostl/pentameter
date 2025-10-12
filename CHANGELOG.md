@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Increased auto-discovery timeout from 5 seconds to 60 seconds for better reliability on slower networks
 - Enhanced discovery logging with periodic retry messages every 2 seconds to show progress
 - Removed debug log statements from production code for cleaner output
+- **Increased Prometheus data retention from 30 days to 730 days (2 years) for long-term historical analysis**
+- Updated dependencies: prometheus/client_golang and related packages to latest versions
 
 ### Fixed
 - Auto-discovery now provides clearer guidance when mDNS fails, directing users to manual IP configuration
@@ -24,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added VERSION build arg documentation for Docker builds
 - Enhanced RELEASE.md with comprehensive troubleshooting section
 - Fixed Homebrew formula checksums to match GitHub release assets
+- Updated roadmap to focus on core development tasks
 
 ## [0.3.0] - 2025-10-11
 

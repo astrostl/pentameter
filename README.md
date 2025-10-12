@@ -610,7 +610,7 @@ docker run -d \
 
 ### Configuration
 - **Scrape Interval**: 60 seconds (matches polling interval)
-- **Data Retention**: 30 days for temperature and connection metrics
+- **Data Retention**: 730 days (2 years) for long-term historical analysis
 - **Network**: Docker bridge communication via pentameter-net
 - **Format**: Standard Prometheus metrics with label-based time series
 
@@ -677,7 +677,6 @@ intellicenter_last_refresh_timestamp_seconds
 - Implement structured logging with configurable levels
 - Add comprehensive integration tests
 - Implement automated coverage reporting
-- Add performance and connection quality metrics
 - Alert rule templates and notification integrations
-- Add storage monitoring for Prometheus and Grafana data volumes
+- Update Makefile release targets to reflect current multi-step workflow
 
