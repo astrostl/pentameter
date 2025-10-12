@@ -304,6 +304,17 @@ The pentameter-app service uses `network_mode: "host"` for several important rea
 
 **Prometheus and Grafana**: These services remain on the bridge network (`pentameter-net`) since they don't need mDNS access and benefit from network isolation. They connect to pentameter via localhost on the host network.
 
+**mDNS Discovery Implementation Details:**
+
+The mDNS discovery code explicitly selects a network interface rather than using the default (`nil`) interface. This is critical for Docker containers:
+
+- **Interface Selection**: `getBestMulticastInterface()` finds the best available network interface
+- **Selection Criteria**: Prefers non-loopback, up interfaces with IPv4 addresses and multicast support
+- **Fallback Strategy**: If no ideal interface found, uses any multicast-capable interface
+- **Verbose Logging**: When discovery is enabled, logs which interface is selected for debugging
+
+This explicit interface selection is what makes mDNS work in Docker containers with host networking, where the default interface selection doesn't work reliably.
+
 ### After ANY Code Changes - MANDATORY STEPS:
 
 **⚠️ CRITICAL: ALWAYS USE MAKEFILE TARGETS FOR PENTAMETER DEBUGGING ⚠️**
