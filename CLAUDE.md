@@ -594,6 +594,99 @@ The system uses consistent 1-minute (60-second) intervals across all components.
 
 **To change intervals**: Update all four locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all four settings proportionally to maintain the 1:1:1:1 ratio for optimal metric freshness and cleanup behavior.
 
+## Auto-Discovery - Finding IntelliCenter on Network
+
+### Overview
+
+Pentameter can automatically discover IntelliCenter controllers via mDNS (multicast DNS). The IntelliCenter broadcasts itself as `pentair.local` on the local network, allowing pentameter to find it without manual IP configuration.
+
+### Design Principles
+
+**Zero-Configuration Operation:**
+- No IP address required for basic operation
+- Automatic network discovery on startup
+- Falls back to manual IP if discovery fails or is disabled
+- Discovery timeout prevents indefinite waiting (5-second default)
+
+**mDNS Discovery Implementation:**
+- Uses golang.org/x/net/ipv4 for multicast DNS queries
+- Queries for `pentair.local` hostname
+- Returns first valid IPv4 address found
+- Works on most home networks without configuration
+
+### Key Features
+
+1. **Automatic Discovery**: Finds IntelliCenter without user configuration
+2. **Fast Discovery**: Typical discovery time 1-5 seconds
+3. **Manual Override**: `--ic-ip` flag bypasses discovery
+4. **Discovery Testing**: `--discover` flag shows IP and exits
+5. **Graceful Fallback**: Clear error messages if discovery fails
+
+### Implementation Notes
+
+**Discovery Flow:**
+```go
+// 1. Check if IP provided via flag or environment
+if icIP == "" {
+    // 2. Attempt mDNS discovery
+    discoveredIP, err := discoverIntelliCenter(5 * time.Second)
+    if err != nil {
+        // 3. Fail with helpful error message
+        log.Fatalf("Could not discover IntelliCenter: %v\nUse --ic-ip flag to specify manually", err)
+    }
+    icIP = discoveredIP
+}
+```
+
+**Network Requirements:**
+- Multicast DNS (mDNS) must be enabled on network
+- UDP port 5353 must not be blocked
+- IntelliCenter and pentameter must be on same network segment
+- Some corporate/guest networks may block multicast traffic
+
+### Testing Discovery
+
+**Discovery Test Mode:**
+```bash
+# Test discovery and show IP address
+pentameter --discover
+# Output: IntelliCenter discovered at: 192.168.1.100
+
+# Test with timeout (future enhancement)
+pentameter --discover --timeout 10
+```
+
+**Manual IP Override:**
+```bash
+# Bypass discovery entirely
+pentameter --ic-ip 192.168.1.100
+
+# Via environment variable
+export PENTAMETER_IC_IP=192.168.1.100
+pentameter
+```
+
+### Troubleshooting
+
+**Discovery Fails:**
+- Check IntelliCenter is on same network
+- Verify mDNS/Bonjour is not blocked by firewall
+- Try manual IP with `--ic-ip` flag
+- Test network connectivity: `ping pentair.local`
+
+**Slow Discovery:**
+- Normal discovery: 1-5 seconds
+- Slow network: up to 10 seconds
+- Adjust timeout if needed (future enhancement)
+
+### Future Enhancements
+
+Potential improvements for auto-discovery:
+- Configurable discovery timeout
+- Multiple IntelliCenter detection with selection
+- Discovery caching to avoid repeated lookups
+- mDNS service browsing for additional metadata
+
 ## Listen Mode - Live Equipment Monitoring
 
 ### Overview

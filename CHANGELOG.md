@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2025-10-11
 
 ### Added
+- IntelliCenter auto-discovery via mDNS (multicast DNS) - automatically finds `pentair.local` on network
+- `--discover` flag to test auto-discovery and show IntelliCenter IP address
+- Optional `--ic-ip` flag - uses auto-discovery when not provided
+- Listen mode (`--listen` flag) for live equipment change monitoring with rapid polling
+- Real-time event logging showing initial equipment state and all changes
+- Unknown equipment discovery - automatically detects and logs equipment types not specifically implemented
+- Change detection for all equipment types (circuits, pumps, temperatures, thermal equipment, features)
+- Configurable rapid polling interval (defaults to 2 seconds in listen mode)
+- Clean event-only output mode for monitoring and debugging
+
+### Changed
+- Dependency updates: prometheus/client_golang 1.22.0 → 1.23.2
+- Dependency additions: golang.org/x/net v0.46.0, golang.org/x/sys v0.37.0
+- Refactored test code for improved maintainability using test constants and helper functions
+- Streamlined RELEASE.md checklist to focus on release mechanics
+- IntelliCenter IP address now optional - defaults to auto-discovery if not specified
+
+### Infrastructure
+- Reduced test code by 42 lines through better code reuse patterns
+- Test suite maintains 100% pass rate with 82 tests
+- Added mDNS discovery capability with network auto-detection
+
+## [0.2.2] - 2025-07-28
+
+### Added
 - Listen mode (`--listen` flag) for live equipment change monitoring with rapid polling
 - Real-time event logging showing initial equipment state and all changes
 - Unknown equipment discovery - automatically detects and logs equipment types not specifically implemented

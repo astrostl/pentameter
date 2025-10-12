@@ -12,9 +12,10 @@ Pentameter is a Prometheus exporter for Pentair IntelliCenter pool controllers t
 
 ### Real-Time Data Collection
 - **Temperature Monitoring**: Pool, spa, and outdoor air sensors
-- **Pump Monitoring**: Variable speed RPM and flow rates  
+- **Pump Monitoring**: Variable speed RPM and flow rates
 - **Equipment Status**: Circuit and feature on/off states
 - **Connection Health**: Automatic failure detection and recovery
+- **Auto-Discovery**: Finds IntelliCenter automatically via mDNS (multicast DNS)
 
 ### Data Export and Visualization
 - **Prometheus Metrics**: Standard format compatible with any monitoring tool
@@ -30,6 +31,8 @@ Pentameter is a Prometheus exporter for Pentair IntelliCenter pool controllers t
 
 ### Technical Features
 - WebSocket connection to IntelliCenter controllers
+- Automatic IntelliCenter discovery via mDNS (finds `pentair.local` on network)
+- Listen mode for real-time equipment change monitoring and debugging
 - Robust connection management with exponential backoff retry logic
 - Health checks with automatic reconnection on failures
 - Configurable via command line flags or environment variables
