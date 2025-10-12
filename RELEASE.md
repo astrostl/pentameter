@@ -118,14 +118,14 @@ Both should show exactly `pentameter v0.X.X` with NO suffixes like `-dirty` or `
 
 ### Step 6: Record Checksums for Formula
 
-Save these checksums - you'll need them after the GitHub release:
+**CRITICAL:** Save these checksums NOW - you'll need them in Step 8:
 
 ```bash
-# Display checksums
+# Display and save checksums
 cat dist/checksums.txt
 ```
 
-Copy these values somewhere safe. The Homebrew formula will need these EXACT checksums.
+**Copy these SHA256 values to a text file or leave this terminal window open.** The Homebrew formula MUST use these EXACT checksums that match the GitHub release assets.
 
 ### Step 7: Create GitHub Release
 
@@ -162,18 +162,33 @@ Generated with [Claude Code](https://claude.com/claude-code)" \
 
 ### Step 8: Update Homebrew Formula with Correct Checksums
 
-Now update the formula with the checksums that match the GitHub release assets:
+**CRITICAL:** Manually update the formula with the checksums you saved in Step 6. DO NOT run `make update-homebrew-formula` as it will rebuild binaries with different checksums.
 
 ```bash
-# Run the formula update (this will update with current checksums)
-make update-homebrew-formula
+# Edit the formula manually
+nano Formula/pentameter.rb
+# OR use your preferred editor
+code Formula/pentameter.rb
+```
 
-# Verify the checksums match what's in dist/checksums.txt
-cat dist/checksums.txt
+Update these two lines with the checksums from Step 6:
+- Line 9: ARM64 sha256 (for `darwin-arm64.tar.gz`)
+- Line 12: AMD64 sha256 (for `darwin-amd64.tar.gz`)
+
+**Verify the checksums match GitHub release:**
+
+```bash
+# Download and verify ARM64 checksum from GitHub
+curl -sL https://github.com/astrostl/pentameter/releases/download/v0.X.X/pentameter-v0.X.X-darwin-arm64.tar.gz | shasum -a 256
+
+# Download and verify AMD64 checksum from GitHub
+curl -sL https://github.com/astrostl/pentameter/releases/download/v0.X.X/pentameter-v0.X.X-darwin-amd64.tar.gz | shasum -a 256
+
+# Compare with formula
 grep sha256 Formula/pentameter.rb
 ```
 
-The SHA256 values in the formula MUST exactly match the checksums in `dist/checksums.txt`.
+All three sources (Step 6 checksums, GitHub download checksums, formula checksums) MUST match exactly.
 
 ### Step 9: Commit and Push Formula
 
@@ -242,11 +257,18 @@ If you get a SHA256 mismatch error:
 
 **Cause:** The checksums in the formula don't match the GitHub release assets.
 
+**Root Cause:** Running `make update-homebrew-formula` in Step 8 rebuilds binaries with different checksums than what was uploaded to GitHub.
+
 **Solution:**
-1. Verify what checksums the GitHub release actually has: Download an asset and run `shasum -a 256` on it
-2. Update `Formula/pentameter.rb` with the correct checksums from `dist/checksums.txt`
-3. Commit and push the formula fix
-4. Clear Homebrew cache and try again
+1. Download a release asset from GitHub and verify its checksum:
+   ```bash
+   curl -sL https://github.com/astrostl/pentameter/releases/download/v0.X.X/pentameter-v0.X.X-darwin-arm64.tar.gz | shasum -a 256
+   ```
+2. Manually edit `Formula/pentameter.rb` with the correct checksum
+3. DO NOT use `make update-homebrew-formula` - it rebuilds binaries
+4. Commit and push the formula fix
+5. Clear Homebrew cache: `rm -f ~/Library/Caches/Homebrew/downloads/*pentameter*`
+6. Test: `brew upgrade pentameter`
 
 ### Issue: "make docker-push" Fails with "not found"
 
@@ -290,10 +312,10 @@ Use this checklist to track progress:
 - [ ] Multi-platform manifests created (latest and version)
 - [ ] Homebrew binaries built (`rm -rf dist && make build-macos-binaries package-macos-binaries generate-macos-checksums`)
 - [ ] Binary versions verified (no -dirty or -hash suffixes)
-- [ ] Checksums recorded from `dist/checksums.txt`
+- [ ] Checksums saved from `dist/checksums.txt` (copy to text file or keep terminal open)
 - [ ] GitHub release created with assets
-- [ ] Homebrew formula updated with correct checksums (`make update-homebrew-formula`)
-- [ ] Formula checksums verified against `dist/checksums.txt`
+- [ ] Homebrew formula manually edited with checksums from Step 6
+- [ ] Formula checksums verified against GitHub release downloads
 - [ ] Formula committed and pushed
 - [ ] Homebrew installation tested successfully
 - [ ] Installed version verified (`pentameter --version`)
