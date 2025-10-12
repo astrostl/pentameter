@@ -23,10 +23,13 @@ class Pentameter < Formula
     <<~EOS
       Pentameter requires connection to a Pentair IntelliCenter pool controller.
 
-      Set your IntelliCenter IP address:
-        export PENTAMETER_IC_IP=192.168.1.100
+      Auto-discovery (recommended):
+        pentameter
 
-      Start the exporter:
+      The IntelliCenter will be automatically discovered via mDNS (pentair.local).
+
+      Manual IP configuration (if auto-discovery fails):
+        export PENTAMETER_IC_IP=192.168.1.100
         pentameter
 
       Metrics are available at: http://localhost:8080/metrics
