@@ -1475,6 +1475,7 @@ func parseCommandLineFlags() *appConfig {
 
 	if *discoverOnly {
 		log.Println("Discovering IntelliCenter...")
+		log.Println("Searching for IntelliCenter on network (up to 60 seconds). Press Ctrl-C to cancel.")
 		ip, err := DiscoverIntelliCenter()
 		if err != nil {
 			log.Fatalf("Discovery failed: %v", err)
@@ -1491,6 +1492,7 @@ func parseCommandLineFlags() *appConfig {
 	// If no IP provided, attempt auto-discovery
 	if *intelliCenterIP == "" {
 		log.Println("No IP address provided, attempting auto-discovery...")
+		log.Println("Searching for IntelliCenter on network (up to 60 seconds). Press Ctrl-C to cancel.")
 		discoveredIP, err := DiscoverIntelliCenter()
 		if err != nil {
 			log.Fatalf("Auto-discovery failed: %v\nPlease provide IP address using --ic-ip flag or PENTAMETER_IC_IP environment variable", err)

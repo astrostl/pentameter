@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	discoveryTimeout = 5 * time.Second
+	discoveryTimeout = 60 * time.Second
 	mdnsAddress      = "224.0.0.251:5353"
 	readTimeout      = 100 * time.Millisecond
 	maxBufSize       = 1500
@@ -86,7 +86,7 @@ func collectHostnameResponse(conn *net.UDPConn) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no response for pentair.local hostname via mDNS after %v", discoveryTimeout)
+	return "", fmt.Errorf("IntelliCenter not found on network after %v. Ensure IntelliCenter is powered on and connected to the same network", discoveryTimeout)
 }
 
 // readAndProcessResponse reads one mDNS response and checks for pentair IP.
