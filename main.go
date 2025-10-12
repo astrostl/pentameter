@@ -989,9 +989,7 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 }
 
 func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status string, responseTime time.Duration) {
-		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
-	} else {
-		pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s)", name, objName, rpm, status)
+	pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
 }
 
 func (pm *PoolMonitor) IsHealthy(_ context.Context) bool {
