@@ -11,6 +11,7 @@ import (
 
 const (
 	discoveryTimeout = 60 * time.Second
+	retryInterval    = 2 * time.Second
 	mdnsAddress      = "224.0.0.251:5353"
 	readTimeout      = 100 * time.Millisecond
 	maxBufSize       = 1500
@@ -31,13 +32,8 @@ func DiscoverIntelliCenter() (string, error) {
 	}
 	defer conn.Close()
 
-	// Send mDNS query for pentair.local hostname
-	if err := sendHostnameQuery(conn, mcastAddr, "pentair.local."); err != nil {
-		return "", err
-	}
-
-	// Collect responses and find Pentair IntelliCenter IP
-	ip, err := collectHostnameResponse(conn)
+	// Collect responses and find Pentair IntelliCenter IP with retries
+	ip, err := collectHostnameResponseWithRetry(conn, mcastAddr)
 	if err != nil {
 		return "", err
 	}
@@ -71,12 +67,21 @@ func sendHostnameQuery(conn *net.UDPConn, mcastAddr *net.UDPAddr, hostname strin
 	return nil
 }
 
-// collectHostnameResponse collects mDNS responses for pentair.local hostname.
-func collectHostnameResponse(conn *net.UDPConn) (string, error) {
+// collectHostnameResponseWithRetry collects mDNS responses for pentair.local hostname with periodic query retries.
+func collectHostnameResponseWithRetry(conn *net.UDPConn, mcastAddr *net.UDPAddr) (string, error) {
 	deadline := time.Now().Add(discoveryTimeout)
+	lastQueryTime := time.Time{} // Force immediate first query
 	buffer := make([]byte, maxBufSize)
 
 	for time.Now().Before(deadline) {
+		// Send query every retryInterval
+		if time.Since(lastQueryTime) >= retryInterval {
+			if err := sendHostnameQuery(conn, mcastAddr, "pentair.local."); err != nil {
+				return "", err
+			}
+			lastQueryTime = time.Now()
+		}
+
 		ip, found, err := readAndProcessResponse(conn, buffer)
 		if err != nil {
 			continue // Continue trying on errors
