@@ -606,7 +606,7 @@ Pentameter can automatically discover IntelliCenter controllers via mDNS (multic
 - No IP address required for basic operation
 - Automatic network discovery on startup
 - Falls back to manual IP if discovery fails or is disabled
-- Discovery timeout prevents indefinite waiting (5-second default)
+- Discovery timeout prevents indefinite waiting (60-second default with progress indicators every 2 seconds)
 
 **mDNS Discovery Implementation:**
 - Uses golang.org/x/net/ipv4 for multicast DNS queries
@@ -617,10 +617,11 @@ Pentameter can automatically discover IntelliCenter controllers via mDNS (multic
 ### Key Features
 
 1. **Automatic Discovery**: Finds IntelliCenter without user configuration
-2. **Fast Discovery**: Typical discovery time 1-5 seconds
-3. **Manual Override**: `--ic-ip` flag bypasses discovery
-4. **Discovery Testing**: `--discover` flag shows IP and exits
-5. **Graceful Fallback**: Clear error messages if discovery fails
+2. **Fast Discovery**: Typical discovery time 1-5 seconds, timeout after 60 seconds
+3. **Progress Indicators**: Visible retry messages every 2 seconds during discovery
+4. **Manual Override**: `--ic-ip` flag bypasses discovery
+5. **Discovery Testing**: `--discover` flag shows IP and exits
+6. **Graceful Fallback**: Clear error messages with guidance on using `--ic-ip` flag if discovery fails
 
 ### Implementation Notes
 
@@ -628,10 +629,10 @@ Pentameter can automatically discover IntelliCenter controllers via mDNS (multic
 ```go
 // 1. Check if IP provided via flag or environment
 if icIP == "" {
-    // 2. Attempt mDNS discovery
-    discoveredIP, err := discoverIntelliCenter(5 * time.Second)
+    // 2. Attempt mDNS discovery with 60-second timeout and progress indicators
+    discoveredIP, err := discoverIntelliCenter(60 * time.Second)
     if err != nil {
-        // 3. Fail with helpful error message
+        // 3. Fail with helpful error message guiding users to --ic-ip flag
         log.Fatalf("Could not discover IntelliCenter: %v\nUse --ic-ip flag to specify manually", err)
     }
     icIP = discoveredIP
@@ -676,8 +677,8 @@ pentameter
 
 **Slow Discovery:**
 - Normal discovery: 1-5 seconds
-- Slow network: up to 10 seconds
-- Adjust timeout if needed (future enhancement)
+- Slow network: up to 60 seconds with progress indicators every 2 seconds
+- Discovery shows visible retry attempts during network scanning
 
 ### Future Enhancements
 

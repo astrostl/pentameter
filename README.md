@@ -252,7 +252,7 @@ Pentameter can automatically discover your IntelliCenter on the local network us
 
 **How it works:**
 - When `--ic-ip` is not provided, pentameter automatically searches for `pentair.local` via mDNS
-- Discovery typically takes 1-5 seconds
+- Discovery timeout is 60 seconds with progress indicators every 2 seconds
 - Works on most home networks without additional configuration
 
 **Test discovery:**
@@ -275,7 +275,8 @@ pentameter
 ```
 
 **Troubleshooting:**
-- If auto-discovery fails, check that your IntelliCenter is on the same network
+- If auto-discovery fails, pentameter provides clear guidance on using the `--ic-ip` flag
+- Check that your IntelliCenter is on the same network
 - Some networks may block mDNS multicast traffic (port 5353/UDP)
 - Firewalls may need to allow multicast traffic to 224.0.0.251:5353
 - Use `--ic-ip` flag to manually specify IP address if auto-discovery doesn't work

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-10-11
+
+### Changed
+- Improved auto-discovery error messaging to guide users on manual IP configuration via `--ic-ip` flag
+- Increased auto-discovery timeout from 5 seconds to 60 seconds for better reliability on slower networks
+- Enhanced discovery logging with periodic retry messages every 2 seconds to show progress
+- Removed debug log statements from production code for cleaner output
+
+### Fixed
+- Auto-discovery now provides clearer guidance when mDNS fails, directing users to manual IP configuration
+- Discovery process shows visible progress indicators during network scanning
+
+### Documentation
+- Updated Homebrew formula caveats to explain auto-discovery and `--ic-ip` flag usage
+- Added VERSION build arg documentation for Docker builds
+- Enhanced RELEASE.md with comprehensive troubleshooting section
+- Fixed Homebrew formula checksums to match GitHub release assets
+
 ## [0.3.0] - 2025-10-11
 
 ### Added
