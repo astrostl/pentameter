@@ -35,6 +35,8 @@ services:
       - '--web.enable-lifecycle'
       - '--web.enable-admin-api'
       - '--query.lookback-delta=1m'
+    extra_hosts:
+      - "pentameter-app:host-gateway"
     networks:
       - pentameter-net
 
