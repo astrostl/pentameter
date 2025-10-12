@@ -29,6 +29,9 @@ class Pentameter < Formula
       The IntelliCenter will be automatically discovered via mDNS (pentair.local).
 
       Manual IP configuration (if auto-discovery fails):
+        pentameter --ic-ip 192.168.1.100
+
+      Or via environment variable:
         export PENTAMETER_IC_IP=192.168.1.100
         pentameter
 
