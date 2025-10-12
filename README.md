@@ -91,10 +91,11 @@ Pentameter offers multiple installation methods to suit different deployment pre
 # One-line install (automatically adds tap)
 brew install astrostl/pentameter/pentameter
 
-# Set your IntelliCenter IP address
-export PENTAMETER_IC_IP=192.168.1.100
+# Start the exporter (auto-discovers IntelliCenter)
+pentameter
 
-# Start the exporter
+# Or manually specify IP address if needed
+export PENTAMETER_IC_IP=192.168.1.100
 pentameter
 ```
 
@@ -124,10 +125,11 @@ go install github.com/astrostl/pentameter@latest
 # Or install specific version
 go install github.com/astrostl/pentameter@v0.2.2
 
-# Set your IntelliCenter IP address
-export PENTAMETER_IC_IP=192.168.1.100
+# Start the exporter (auto-discovers IntelliCenter)
+pentameter
 
-# Start the exporter
+# Or manually specify IP address if needed
+export PENTAMETER_IC_IP=192.168.1.100
 pentameter
 ```
 
@@ -148,11 +150,12 @@ Metrics are available at `http://localhost:8080/metrics`
 git clone https://github.com/astrostl/pentameter.git
 cd pentameter
 
-# Configure your IntelliCenter IP
+# Start the complete monitoring stack (auto-discovers IntelliCenter)
+docker compose up -d
+
+# Or manually configure IP if auto-discovery doesn't work
 cp .env.example .env
 # Edit .env and set your PENTAMETER_IC_IP
-
-# Start the complete monitoring stack
 docker compose up -d
 ```
 
@@ -231,13 +234,48 @@ All configuration options can be set via command line flags or environment varia
 
 | Flag | Environment Variable | Default | Description |
 |------|---------------------|---------|-------------|
-| `--ic-ip` | `PENTAMETER_IC_IP` | (required) | IntelliCenter IP address |
+| `--ic-ip` | `PENTAMETER_IC_IP` | (auto-discover) | IntelliCenter IP address (optional, auto-discovers via mDNS if not provided) |
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
 | `--interval` | `PENTAMETER_INTERVAL` | `60` | Polling interval (seconds), `2` in listen mode |
 | `--listen` | `PENTAMETER_LISTEN` | `false` | Enable live event monitoring mode |
 | `--debug` | `PENTAMETER_DEBUG` | `false` | Enable enhanced debugging |
+| `--discover` | N/A | N/A | Discover IntelliCenter IP address and exit |
 | `--version` | N/A | N/A | Show version information |
+
+### Auto-Discovery
+
+Pentameter can automatically discover your IntelliCenter on the local network using mDNS (multicast DNS). The IntelliCenter broadcasts itself as `pentair.local` on the network.
+
+**How it works:**
+- When `--ic-ip` is not provided, pentameter automatically searches for `pentair.local` via mDNS
+- Discovery typically takes 1-5 seconds
+- Works on most home networks without additional configuration
+
+**Test discovery:**
+```bash
+# Test auto-discovery and show IP address
+pentameter --discover
+
+# Example output:
+# IntelliCenter discovered at: 192.168.1.100
+```
+
+**Manual IP specification:**
+```bash
+# Bypass auto-discovery and use specific IP
+pentameter --ic-ip 192.168.1.100
+
+# Or via environment variable
+export PENTAMETER_IC_IP=192.168.1.100
+pentameter
+```
+
+**Troubleshooting:**
+- If auto-discovery fails, check that your IntelliCenter is on the same network
+- Some networks may block mDNS multicast traffic (port 5353/UDP)
+- Firewalls may need to allow multicast traffic to 224.0.0.251:5353
+- Use `--ic-ip` flag to manually specify IP address if auto-discovery doesn't work
 
 ## Listen Mode - Live Equipment Monitoring
 
@@ -631,12 +669,11 @@ intellicenter_last_refresh_timestamp_seconds
 
 ## Roadmap
 
-- Refactor monolithic main.go into focused modules 
+- Refactor monolithic main.go into focused modules
 - Implement structured logging with configurable levels
 - Add comprehensive integration tests
 - Implement automated coverage reporting
 - Add performance and connection quality metrics
 - Alert rule templates and notification integrations
-- IntelliCenter auto-discovery via network scanning
 - Add storage monitoring for Prometheus and Grafana data volumes
 

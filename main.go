@@ -1449,7 +1449,8 @@ type appConfig struct {
 }
 
 func parseCommandLineFlags() *appConfig {
-	intelliCenterIP := flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""), "IntelliCenter IP address (required, env: PENTAMETER_IC_IP)")
+	intelliCenterIP := flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
+		"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)")
 	intelliCenterPort := flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"), "IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)")
 	httpPort := flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"), "HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)")
 	debugMode := flag.Bool("debug", getEnvOrDefault("PENTAMETER_DEBUG", "false") == trueString, "Enable enhanced debugging (env: PENTAMETER_DEBUG)")
@@ -1464,10 +1465,21 @@ func parseCommandLineFlags() *appConfig {
 		return defaultPollInterval
 	}(), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)")
 	showVersion := flag.Bool("version", false, "Show version information")
+	discoverOnly := flag.Bool("discover", false, "Discover IntelliCenter IP address and exit")
 	flag.Parse()
 
 	if *showVersion {
 		log.Printf("pentameter %s", version)
+		os.Exit(0)
+	}
+
+	if *discoverOnly {
+		log.Println("Discovering IntelliCenter...")
+		ip, err := DiscoverIntelliCenter()
+		if err != nil {
+			log.Fatalf("Discovery failed: %v", err)
+		}
+		log.Printf("IntelliCenter discovered at: %s", ip)
 		os.Exit(0)
 	}
 
@@ -1476,8 +1488,15 @@ func parseCommandLineFlags() *appConfig {
 		pollInterval = listenModePollInterval * time.Second
 	}
 
+	// If no IP provided, attempt auto-discovery
 	if *intelliCenterIP == "" {
-		log.Fatal("IntelliCenter IP address is required. Use --ic-ip flag or PENTAMETER_IC_IP environment variable")
+		log.Println("No IP address provided, attempting auto-discovery...")
+		discoveredIP, err := DiscoverIntelliCenter()
+		if err != nil {
+			log.Fatalf("Auto-discovery failed: %v\nPlease provide IP address using --ic-ip flag or PENTAMETER_IC_IP environment variable", err)
+		}
+		*intelliCenterIP = discoveredIP
+		log.Printf("Auto-discovered IntelliCenter at: %s", *intelliCenterIP)
 	}
 
 	return &appConfig{
