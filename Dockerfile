@@ -11,7 +11,10 @@ RUN go mod download
 COPY *.go ./
 
 # Build static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o pentameter .
+# Note: VERSION is passed as build arg during release builds
+# Example: docker build --build-arg VERSION=v0.3.0
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.version=${VERSION}" -a -installsuffix cgo -o pentameter .
 
 # Final stage
 FROM scratch
