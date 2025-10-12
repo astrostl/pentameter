@@ -28,7 +28,13 @@ func DiscoverIntelliCenter(verbose bool) (string, error) {
 		return "", fmt.Errorf("failed to resolve mDNS address: %w", err)
 	}
 
-	conn, err := net.ListenMulticastUDP("udp4", nil, mcastAddr)
+	// Get the appropriate interface for multicast listening
+	iface, err := getBestMulticastInterface(verbose)
+	if err != nil && verbose {
+		log.Printf("Warning: Could not find best interface, using default: %v", err)
+	}
+
+	conn, err := net.ListenMulticastUDP("udp4", iface, mcastAddr)
 	if err != nil {
 		return "", fmt.Errorf("failed to create multicast UDP listener: %w", err)
 	}
@@ -41,6 +47,76 @@ func DiscoverIntelliCenter(verbose bool) (string, error) {
 	}
 
 	return ip, nil
+}
+
+// getBestMulticastInterface finds the best network interface for multicast mDNS.
+// Prefers non-loopback, up interfaces with multicast support.
+func getBestMulticastInterface(verbose bool) (*net.Interface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get network interfaces: %w", err)
+	}
+
+	// First pass: look for ideal interface (up, multicast, not loopback, has addresses)
+	for _, iface := range interfaces {
+		if isIdealMulticastInterface(&iface, verbose) {
+			if verbose {
+				log.Printf("Using interface for mDNS: %s (%s)", iface.Name, iface.HardwareAddr)
+			}
+			return &iface, nil
+		}
+	}
+
+	// Second pass: accept any up interface with multicast
+	for _, iface := range interfaces {
+		if isUsableMulticastInterface(&iface) {
+			if verbose {
+				log.Printf("Using fallback interface for mDNS: %s", iface.Name)
+			}
+			return &iface, nil
+		}
+	}
+
+	// No suitable interface found - return nil to use default behavior
+	return nil, fmt.Errorf("no suitable multicast interface found")
+}
+
+// isIdealMulticastInterface checks if interface is ideal for multicast (up, multicast, not loopback, has IPs).
+func isIdealMulticastInterface(iface *net.Interface, verbose bool) bool {
+	// Must be up and support multicast
+	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagMulticast == 0 {
+		return false
+	}
+
+	// Skip loopback
+	if iface.Flags&net.FlagLoopback != 0 {
+		return false
+	}
+
+	// Check if it has IPv4 addresses
+	addrs, err := iface.Addrs()
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+
+	// Verify at least one IPv4 address exists
+	hasIPv4 := false
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+			hasIPv4 = true
+			if verbose {
+				log.Printf("Found interface %s with IPv4: %s", iface.Name, ipNet.IP)
+			}
+			break
+		}
+	}
+
+	return hasIPv4
+}
+
+// isUsableMulticastInterface checks if interface can be used for multicast (up and multicast-capable).
+func isUsableMulticastInterface(iface *net.Interface) bool {
+	return iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagMulticast != 0
 }
 
 // sendHostnameQuery sends an mDNS query for a specific hostname.
