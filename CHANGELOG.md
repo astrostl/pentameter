@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2025-10-12
+
+### Fixed
+- **Listen mode reliability improvements** - Prevents unnecessary reconnections on messageID mismatches during rapid polling
+- Listen mode now continues operation when receiving mismatched message IDs instead of forcing reconnection
+- Cleaner listen mode behavior with warning messages instead of connection disruptions
+
+### Changed
+- Refactored polling loop into smaller helper functions for improved code maintainability
+- Reduced cyclomatic complexity in temperature polling logic
+- Enhanced error handling separation between listen mode and normal mode
+
 ## [0.3.2] - 2025-10-11
 
 ### Fixed

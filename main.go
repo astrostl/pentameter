@@ -392,9 +392,13 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 	// Validate response correlation
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false // Mark as disconnected to trigger reconnection
-		log.Printf("ERROR: Body temp messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
-		return nil, fmt.Errorf("messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		if !pm.listenMode {
+			pm.connected = false // Mark as disconnected to trigger reconnection (not in listen mode)
+			log.Printf("ERROR: Body temp messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
+			return nil, fmt.Errorf("messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Body temp messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return nil, fmt.Errorf("messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	// Clean up pending request
@@ -525,8 +529,12 @@ func (pm *PoolMonitor) getAirTemperature() error {
 	// Validate response correlation
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false
-		return fmt.Errorf("air temp messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		if !pm.listenMode {
+			pm.connected = false
+			return fmt.Errorf("air temp messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Air temp messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return fmt.Errorf("air temp messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	// Clean up pending request
@@ -621,8 +629,12 @@ func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false
-		return nil, fmt.Errorf("circuit status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		if !pm.listenMode {
+			pm.connected = false
+			return nil, fmt.Errorf("circuit status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Circuit status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return nil, fmt.Errorf("circuit status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -782,8 +794,12 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false
-		return fmt.Errorf("thermal status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		if !pm.listenMode {
+			pm.connected = false
+			return fmt.Errorf("thermal status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Thermal status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return fmt.Errorf("thermal status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -945,9 +961,13 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false
-		log.Printf("ERROR: Pump data messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
-		return nil, 0, fmt.Errorf("pump data messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		if !pm.listenMode {
+			pm.connected = false
+			log.Printf("ERROR: Pump data messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
+			return nil, 0, fmt.Errorf("pump data messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Pump data messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return nil, 0, fmt.Errorf("pump data messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -1035,43 +1055,72 @@ func (pm *PoolMonitor) StartTemperaturePolling(ctx context.Context, interval tim
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// Get initial reading with connection check
+	pm.performInitialPolling(ctx)
+	pm.runPollingLoop(ctx, ticker)
+}
+
+func (pm *PoolMonitor) performInitialPolling(ctx context.Context) {
 	if err := pm.EnsureConnected(ctx); err != nil {
 		log.Printf("Failed to establish initial connection: %v", err)
-	} else if err := pm.LoadFeatureConfiguration(ctx); err != nil {
-		log.Printf("Failed to load feature configuration: %v", err)
-	} else if err := pm.GetTemperatures(ctx); err != nil {
-		log.Printf("Failed to get initial temperatures: %v", err)
-	} else {
-		pm.lastRefresh = time.Now()
-		lastRefreshTimestamp.Set(float64(pm.lastRefresh.Unix()))
+		return
 	}
 
+	if err := pm.LoadFeatureConfiguration(ctx); err != nil {
+		log.Printf("Failed to load feature configuration: %v", err)
+		return
+	}
+
+	if err := pm.GetTemperatures(ctx); err != nil {
+		log.Printf("Failed to get initial temperatures: %v", err)
+		return
+	}
+
+	pm.updateRefreshTimestamp()
+}
+
+func (pm *PoolMonitor) runPollingLoop(ctx context.Context, ticker *time.Ticker) {
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("Temperature polling stopped")
 			return
 		case <-ticker.C:
-			// Ensure connection is healthy before attempting to get temperatures
-			if err := pm.EnsureConnected(ctx); err != nil {
-				log.Printf("Failed to ensure connection: %v", err)
-				connectionFailure.Set(1)
-				continue
-			}
-
-			if err := pm.GetTemperatures(ctx); err != nil {
-				log.Printf("Failed to get temperatures: %v", err)
-				// Mark connection as unhealthy for next iteration
-				pm.connected = false
-				connectionFailure.Set(1)
-			} else {
-				pm.lastRefresh = time.Now()
-				connectionFailure.Set(0)
-				lastRefreshTimestamp.Set(float64(pm.lastRefresh.Unix()))
-			}
+			pm.handlePollingTick(ctx)
 		}
 	}
+}
+
+func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
+	if err := pm.EnsureConnected(ctx); err != nil {
+		log.Printf("Failed to ensure connection: %v", err)
+		connectionFailure.Set(1)
+		return
+	}
+
+	if err := pm.GetTemperatures(ctx); err != nil {
+		pm.handlePollingError(err)
+		return
+	}
+
+	pm.handlePollingSuccess()
+}
+
+func (pm *PoolMonitor) handlePollingError(err error) {
+	log.Printf("Failed to get temperatures: %v", err)
+	if !pm.listenMode {
+		pm.connected = false
+	}
+	connectionFailure.Set(1)
+}
+
+func (pm *PoolMonitor) handlePollingSuccess() {
+	pm.updateRefreshTimestamp()
+	connectionFailure.Set(0)
+}
+
+func (pm *PoolMonitor) updateRefreshTimestamp() {
+	pm.lastRefresh = time.Now()
+	lastRefreshTimestamp.Set(float64(pm.lastRefresh.Unix()))
 }
 
 func getEnvOrDefault(envVar, defaultValue string) string {
@@ -1317,7 +1366,11 @@ func (pm *PoolMonitor) getAllObjects() error {
 
 	if resp.MessageID != messageID {
 		delete(pm.pendingRequests, messageID)
-		pm.connected = false
+		if !pm.listenMode {
+			pm.connected = false
+			return fmt.Errorf("all objects messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: All objects messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
 		return fmt.Errorf("all objects messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
