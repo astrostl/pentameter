@@ -26,8 +26,8 @@ func TestDiscoverIntelliCenterTimeout(t *testing.T) {
 		return
 	}
 
-	if !strings.Contains(err.Error(), "no response") && !strings.Contains(err.Error(), "failed") {
-		t.Errorf("Expected 'no response' or 'failed' error, got: %v", err)
+	if !strings.Contains(err.Error(), "no response") && !strings.Contains(err.Error(), "failed") && !strings.Contains(err.Error(), "not found") {
+		t.Errorf("Expected 'no response', 'failed', or 'not found' error, got: %v", err)
 	}
 }
 

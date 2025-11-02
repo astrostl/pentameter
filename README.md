@@ -255,6 +255,7 @@ Pentameter can automatically discover your IntelliCenter on the local network us
 - Discovery timeout is 60 seconds with progress indicators every 2 seconds
 - Works on most home networks without additional configuration
 - **Docker support**: Auto-discovery works in Docker using host networking (enabled by default)
+- **Automatic re-discovery**: If the IntelliCenter's IP changes (DHCP renewal, router reboot), pentameter automatically re-discovers it after 3 failed connection attempts
 
 **Test discovery:**
 ```bash

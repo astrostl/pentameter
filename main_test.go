@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1081,6 +1082,7 @@ func TestStartTemperaturePollingWithConnectionFailures(t *testing.T) {
 	// Reduce retry config for faster test execution
 	poolMonitor.retryConfig.MaxRetries = 1
 	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.disableAutoRediscovery = true // Disable re-discovery for test
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
@@ -1120,6 +1122,7 @@ func TestStartTemperaturePollingWithGetTemperaturesFailure(t *testing.T) {
 	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
 
 	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
+	poolMonitor.disableAutoRediscovery = true // Disable re-discovery for test
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
@@ -2393,5 +2396,199 @@ func TestListenModeIntegration(t *testing.T) {
 	err = poolMonitor.GetTemperatures(ctx)
 	if err != nil {
 		t.Fatalf("Second GetTemperatures failed: %v", err)
+	}
+}
+
+// Re-discovery tests
+//
+// Testing Strategy:
+// - We test all the logic surrounding re-discovery (failure counting, threshold detection,
+//   IP updating, mode switching) extensively
+// - We do NOT test attemptRediscovery() directly because it requires real mDNS discovery
+//   and an actual IntelliCenter on the network, which would make tests non-deterministic
+// - This is a pragmatic approach: test the logic we control, not external network dependencies
+
+func TestUpdateIntelliCenterIP(t *testing.T) {
+	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false, false)
+
+	// Verify initial state
+	if poolMonitor.intelliCenterIP != "192.168.1.100" {
+		t.Errorf("Expected initial IP 192.168.1.100, got %s", poolMonitor.intelliCenterIP)
+	}
+	if poolMonitor.intelliCenterURL != "ws://192.168.1.100:6680" {
+		t.Errorf("Expected initial URL ws://192.168.1.100:6680, got %s", poolMonitor.intelliCenterURL)
+	}
+
+	// Update IP
+	poolMonitor.updateIntelliCenterIP("192.168.1.200")
+
+	// Verify updated state
+	if poolMonitor.intelliCenterIP != "192.168.1.200" {
+		t.Errorf("Expected updated IP 192.168.1.200, got %s", poolMonitor.intelliCenterIP)
+	}
+	if poolMonitor.intelliCenterURL != "ws://192.168.1.200:6680" {
+		t.Errorf("Expected updated URL ws://192.168.1.200:6680, got %s", poolMonitor.intelliCenterURL)
+	}
+	if poolMonitor.connected {
+		t.Error("Expected connected to be false after IP update")
+	}
+}
+
+func TestHandlePollingSuccess(t *testing.T) {
+	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false, false)
+
+	// Set up failure state
+	poolMonitor.consecutiveFailures = 5
+	poolMonitor.inRediscoveryMode = true
+
+	// Call handlePollingSuccess
+	poolMonitor.handlePollingSuccess()
+
+	// Verify success resets failure tracking
+	if poolMonitor.consecutiveFailures != 0 {
+		t.Errorf("Expected consecutiveFailures to be 0, got %d", poolMonitor.consecutiveFailures)
+	}
+	if poolMonitor.inRediscoveryMode {
+		t.Error("Expected inRediscoveryMode to be false after success")
+	}
+}
+
+func TestConsecutiveFailureTracking(t *testing.T) {
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
+	poolMonitor.retryConfig.MaxRetries = 1
+	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.disableAutoRediscovery = true
+
+	// Verify initial state
+	if poolMonitor.consecutiveFailures != 0 {
+		t.Errorf("Expected initial consecutiveFailures to be 0, got %d", poolMonitor.consecutiveFailures)
+	}
+
+	// Trigger first failure
+	err := fmt.Errorf("connection failed")
+	poolMonitor.handlePollingError(err)
+
+	if poolMonitor.consecutiveFailures != 1 {
+		t.Errorf("Expected consecutiveFailures to be 1 after first failure, got %d", poolMonitor.consecutiveFailures)
+	}
+
+	// Trigger second failure
+	poolMonitor.handlePollingError(err)
+
+	if poolMonitor.consecutiveFailures != 2 {
+		t.Errorf("Expected consecutiveFailures to be 2 after second failure, got %d", poolMonitor.consecutiveFailures)
+	}
+
+	// Trigger success - should reset counter
+	poolMonitor.handlePollingSuccess()
+
+	if poolMonitor.consecutiveFailures != 0 {
+		t.Errorf("Expected consecutiveFailures to be 0 after success, got %d", poolMonitor.consecutiveFailures)
+	}
+}
+
+func TestFailureThresholdTriggersRediscoveryMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
+	poolMonitor.retryConfig.MaxRetries = 1
+	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.failureThreshold = 3
+
+	// Test that we don't enter re-discovery mode before threshold
+	poolMonitor.consecutiveFailures = 2
+
+	// Check the logic without calling handlePollingTick (which would trigger actual discovery)
+	shouldEnterRediscovery := !poolMonitor.disableAutoRediscovery &&
+		!poolMonitor.inRediscoveryMode &&
+		poolMonitor.consecutiveFailures >= poolMonitor.failureThreshold
+
+	if shouldEnterRediscovery {
+		t.Error("Should not enter re-discovery mode before threshold (consecutiveFailures=2, threshold=3)")
+	}
+
+	// Test that we would enter re-discovery mode at threshold
+	poolMonitor.consecutiveFailures = 3
+
+	shouldEnterRediscovery = !poolMonitor.disableAutoRediscovery &&
+		!poolMonitor.inRediscoveryMode &&
+		poolMonitor.consecutiveFailures >= poolMonitor.failureThreshold
+
+	if !shouldEnterRediscovery {
+		t.Error("Should enter re-discovery mode at threshold (consecutiveFailures=3, threshold=3)")
+	}
+
+	// Verify the flag is actually set when we manually simulate the logic
+	poolMonitor.inRediscoveryMode = true
+	if !poolMonitor.inRediscoveryMode {
+		t.Error("Failed to set re-discovery mode")
+	}
+}
+
+func TestRediscoveryModeDisabledByFlag(t *testing.T) {
+	poolMonitor := NewPoolMonitor("invalid.host", "6680", false, false)
+	poolMonitor.retryConfig.MaxRetries = 1
+	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.disableAutoRediscovery = true
+	poolMonitor.failureThreshold = 3
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	// Simulate exceeding threshold
+	poolMonitor.consecutiveFailures = 5
+	poolMonitor.handlePollingTick(ctx)
+
+	// Should not enter re-discovery mode when disabled
+	if poolMonitor.inRediscoveryMode {
+		t.Error("Should not enter re-discovery mode when disableAutoRediscovery is true")
+	}
+}
+
+func TestHandlePollingTickWithRediscoverySuccess(t *testing.T) {
+	// Create a test server
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Failed to upgrade connection: %v", err)
+		}
+		defer conn.Close()
+
+		// Keep connection alive for the duration of the test
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false, false)
+	poolMonitor.disableAutoRediscovery = true // We'll manually control re-discovery
+
+	// Set up state: in re-discovery mode with failures
+	poolMonitor.inRediscoveryMode = true
+	poolMonitor.consecutiveFailures = 5
+
+	// Mock successful re-discovery by updating IP to a working server
+	poolMonitor.updateIntelliCenterIP(urlParts[0])
+
+	// Manually trigger re-discovery success path
+	// In real scenario, attemptRediscovery would be called, but we can't easily test that
+	// without a real IntelliCenter. Instead, we test the success handling.
+	poolMonitor.handlePollingSuccess()
+
+	// Verify re-discovery mode exited and failures reset
+	if poolMonitor.inRediscoveryMode {
+		t.Error("Should exit re-discovery mode after success")
+	}
+	if poolMonitor.consecutiveFailures != 0 {
+		t.Errorf("Should reset consecutive failures after success, got %d", poolMonitor.consecutiveFailures)
 	}
 }

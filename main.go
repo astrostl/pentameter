@@ -41,6 +41,9 @@ const (
 	// Listen mode polling interval (rapid polling for change detection).
 	listenModePollInterval = 2
 
+	// Re-discovery failure threshold (number of consecutive failures before attempting re-discovery).
+	defaultFailureThreshold = 3
+
 	// Circuit status constants.
 	statusOn = "ON"
 
@@ -167,19 +170,25 @@ var (
 )
 
 type PoolMonitor struct {
-	lastHealthCheck   time.Time
-	lastRefresh       time.Time
-	conn              *websocket.Conn
-	bodyHeatingStatus map[string]bool           // Track which bodies are actively heating
-	referencedHeaters map[string]BodyHeaterInfo // Track body-to-heater assignments
-	pendingRequests   map[string]time.Time      // Track messageID -> request time
-	featureConfig     map[string]string         // Track feature objnam -> SHOMNU for visibility
-	previousState     *EquipmentState           // Previous state for change detection
-	intelliCenterURL  string
-	retryConfig       RetryConfig
-	connected         bool
-	debugMode         bool // Enable enhanced debugging
-	listenMode        bool // Enable live event logging mode
+	lastHealthCheck        time.Time
+	lastRefresh            time.Time
+	conn                   *websocket.Conn
+	bodyHeatingStatus      map[string]bool           // Track which bodies are actively heating
+	referencedHeaters      map[string]BodyHeaterInfo // Track body-to-heater assignments
+	pendingRequests        map[string]time.Time      // Track messageID -> request time
+	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
+	previousState          *EquipmentState           // Previous state for change detection
+	intelliCenterURL       string
+	intelliCenterIP        string // Store IP separately for re-discovery
+	intelliCenterPort      string // Store port for URL reconstruction
+	retryConfig            RetryConfig
+	connected              bool
+	debugMode              bool // Enable enhanced debugging
+	listenMode             bool // Enable live event logging mode
+	consecutiveFailures    int  // Track consecutive connection failures for re-discovery
+	failureThreshold       int  // Number of failures before attempting re-discovery
+	inRediscoveryMode      bool // Currently attempting re-discovery
+	disableAutoRediscovery bool // Disable automatic re-discovery (for testing)
 }
 
 // EquipmentState tracks the current state of all equipment for change detection.
@@ -215,7 +224,9 @@ type RetryConfig struct {
 
 func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listenMode bool) *PoolMonitor {
 	return &PoolMonitor{
-		intelliCenterURL: fmt.Sprintf("ws://%s", net.JoinHostPort(intelliCenterIP, intelliCenterPort)),
+		intelliCenterURL:  fmt.Sprintf("ws://%s", net.JoinHostPort(intelliCenterIP, intelliCenterPort)),
+		intelliCenterIP:   intelliCenterIP,
+		intelliCenterPort: intelliCenterPort,
 		retryConfig: RetryConfig{
 			MaxRetries:      maxRetries,
 			BaseDelay:       baseDelaySeconds * time.Second,
@@ -223,14 +234,18 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listen
 			BackoffFactor:   backoffFactor,
 			HealthCheckRate: healthCheckInterval,
 		},
-		connected:         false,
-		bodyHeatingStatus: make(map[string]bool),
-		referencedHeaters: make(map[string]BodyHeaterInfo),
-		pendingRequests:   make(map[string]time.Time),
-		featureConfig:     make(map[string]string),
-		previousState:     nil,
-		debugMode:         debugMode,
-		listenMode:        listenMode,
+		connected:              false,
+		bodyHeatingStatus:      make(map[string]bool),
+		referencedHeaters:      make(map[string]BodyHeaterInfo),
+		pendingRequests:        make(map[string]time.Time),
+		featureConfig:          make(map[string]string),
+		previousState:          nil,
+		debugMode:              debugMode,
+		listenMode:             listenMode,
+		consecutiveFailures:    0,
+		failureThreshold:       defaultFailureThreshold,
+		inRediscoveryMode:      false,
+		disableAutoRediscovery: false,
 	}
 }
 
@@ -1091,9 +1106,31 @@ func (pm *PoolMonitor) runPollingLoop(ctx context.Context, ticker *time.Ticker) 
 }
 
 func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
+	// Check if we need to enter re-discovery mode (only if auto-discovery is enabled)
+	if !pm.disableAutoRediscovery && !pm.inRediscoveryMode && pm.consecutiveFailures >= pm.failureThreshold {
+		log.Printf("Connection failed %d times, entering re-discovery mode", pm.consecutiveFailures)
+		pm.inRediscoveryMode = true
+	}
+
+	// If in re-discovery mode, attempt re-discovery instead of normal connection
+	if pm.inRediscoveryMode {
+		if pm.attemptRediscovery(ctx) {
+			// Re-discovery succeeded, exit re-discovery mode and reset failure counter
+			pm.inRediscoveryMode = false
+			pm.consecutiveFailures = 0
+			log.Printf("Re-discovery successful, resuming normal operation")
+			// Fall through to attempt normal polling
+		} else {
+			// Re-discovery failed, stay in re-discovery mode and try again next interval
+			connectionFailure.Set(1)
+			return
+		}
+	}
+
+	// Normal connection and polling
 	if err := pm.EnsureConnected(ctx); err != nil {
 		log.Printf("Failed to ensure connection: %v", err)
-		connectionFailure.Set(1)
+		pm.handlePollingError(err)
 		return
 	}
 
@@ -1110,17 +1147,61 @@ func (pm *PoolMonitor) handlePollingError(err error) {
 	if !pm.listenMode {
 		pm.connected = false
 	}
+	pm.consecutiveFailures++
 	connectionFailure.Set(1)
 }
 
 func (pm *PoolMonitor) handlePollingSuccess() {
 	pm.updateRefreshTimestamp()
+	pm.consecutiveFailures = 0   // Reset failure counter on success
+	pm.inRediscoveryMode = false // Exit re-discovery mode if we were in it
 	connectionFailure.Set(0)
 }
 
 func (pm *PoolMonitor) updateRefreshTimestamp() {
 	pm.lastRefresh = time.Now()
 	lastRefreshTimestamp.Set(float64(pm.lastRefresh.Unix()))
+}
+
+// updateIntelliCenterIP updates the IP address and reconstructs the WebSocket URL.
+func (pm *PoolMonitor) updateIntelliCenterIP(newIP string) {
+	pm.intelliCenterIP = newIP
+	pm.intelliCenterURL = fmt.Sprintf("ws://%s", net.JoinHostPort(newIP, pm.intelliCenterPort))
+	pm.connected = false // Force reconnection with new IP
+}
+
+// attemptRediscovery tries to discover the IntelliCenter via mDNS and update the IP.
+// Returns true if discovery succeeded and IP was updated, false otherwise.
+//
+// Note: This function is not unit tested because it requires real mDNS discovery
+// and an actual IntelliCenter on the network. The surrounding logic (failure counting,
+// threshold detection, IP updating) is thoroughly tested. Integration testing of this
+// function would require network hardware and make tests non-deterministic.
+func (pm *PoolMonitor) attemptRediscovery(ctx context.Context) bool {
+	log.Printf("Attempting IntelliCenter re-discovery via mDNS...")
+
+	discoveredIP, err := DiscoverIntelliCenter(false) // non-verbose for automatic re-discovery
+	if err != nil {
+		log.Printf("Re-discovery failed: %v (will retry on next poll)", err)
+		return false
+	}
+
+	if discoveredIP == pm.intelliCenterIP {
+		log.Printf("Re-discovery found same IP (%s), connection issue may be temporary", discoveredIP)
+		return false
+	}
+
+	log.Printf("Re-discovery successful! IntelliCenter found at new IP: %s (was: %s)", discoveredIP, pm.intelliCenterIP)
+	pm.updateIntelliCenterIP(discoveredIP)
+
+	// Attempt to connect with new IP
+	if err := pm.Connect(ctx); err != nil {
+		log.Printf("Failed to connect to re-discovered IP %s: %v", discoveredIP, err)
+		return false
+	}
+
+	log.Printf("Successfully reconnected to IntelliCenter at new IP: %s", discoveredIP)
+	return true
 }
 
 func getEnvOrDefault(envVar, defaultValue string) string {

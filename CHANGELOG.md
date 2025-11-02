@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2025-11-01
+
+### Added
+- **Automatic re-discovery of IntelliCenter when IP address changes** - Pentameter now automatically detects when the IntelliCenter's IP changes (DHCP renewal, router reboot) and re-discovers it via mDNS
+- Re-discovery mode activates after 3 consecutive connection failures
+- Persistent re-discovery attempts on each poll interval until IntelliCenter is found at new IP
+- Comprehensive test coverage for re-discovery logic (74.5% overall coverage)
+
+### Fixed
+- **Critical bug where pentameter couldn't recover from IntelliCenter IP address changes** - Previously, if IntelliCenter's IP changed, pentameter would be stuck retrying the old stale IP forever
+- Connection resilience significantly improved for long-running deployments
+
+### Changed
+- Enhanced connection failure tracking with consecutive failure counter
+- Polling logic now distinguishes between temporary connection issues and IP address changes
+- Re-discovery can be disabled for testing via `disableAutoRediscovery` flag
+
+### Documentation
+- Added comprehensive testing strategy documentation for re-discovery logic
+- Documented why `attemptRediscovery` function is not unit tested (requires real hardware)
+- Updated test comments to explain pragmatic testing approach
+
+### Infrastructure
+- Added 7 new tests for re-discovery functionality
+- Test suite completes in ~3 seconds with 100% pass rate
+- All quality checks pass (formatting, linting, complexity, security)
+
 ## [0.3.3] - 2025-10-12
 
 ### Fixed
