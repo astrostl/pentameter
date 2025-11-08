@@ -46,6 +46,49 @@ All messages use JSON format with these structures:
 }
 ```
 
+## API Architecture: Request/Response Only
+
+**IMPORTANT:** The IntelliCenter WebSocket API does **NOT** support push notifications or unsolicited messages.
+
+### Verified Behavior
+
+Testing confirms the API operates in strict request/response mode:
+- IntelliCenter never sends unsolicited messages
+- All data must be explicitly requested via commands
+- Connection remains open but idle without requests
+- No subscription or event streaming mechanisms exist
+
+**Test Results (2025-11-08):**
+```
+Connection maintained for 2 minutes with no requests sent
+Equipment cycled (lights, pumps, temperature changes)
+Result: 0 unsolicited messages received
+```
+
+### Implications for Monitoring
+
+This means:
+- **Polling is required** - applications must periodically request state updates
+- **Event-driven architecture is not possible** - cannot receive instant notifications
+- **Persistent connections are beneficial** - maintain connection and reuse for multiple requests
+- **Optimal polling interval** - balance responsiveness vs network overhead (pentameter uses 2s for listen mode, 60s for metrics)
+
+### Testing Push Support
+
+A test utility is included to verify push notification behavior:
+
+```bash
+# Build test utility
+go build -o test_push test_push.go
+
+# Run 2-minute test
+./test_push --ic-ip 192.168.1.100 --duration 120s
+
+# Cycle equipment while test runs to verify no push messages
+```
+
+The test connects to the WebSocket and listens without sending requests. Any unsolicited messages would be logged with timestamp and content.
+
 ## Basic Configuration Queries
 
 These commands retrieve static system configuration data.

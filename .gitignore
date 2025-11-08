@@ -3,8 +3,9 @@
 .env.local
 .env.*.local
 
-# Go binary
+# Go binaries
 pentameter
+test_push
 
 # Log files
 *.log

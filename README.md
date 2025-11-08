@@ -53,6 +53,8 @@ Pentameter connects to IntelliCenter controllers via WebSocket and transforms po
    - WebSocket connection (default port 6680)
    - JSON message protocol using GetParamList API
    - Exponential backoff retry with health checks
+   - **Request/response polling** - API does not support push notifications (verified 2025-11-08)
+   - Persistent connection with configurable poll intervals (2s for listen mode, 60s default)
 
 3. **Metrics Export**
    - HTTP server (default port 8080)

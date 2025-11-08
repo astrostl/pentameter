@@ -824,7 +824,7 @@ if listenMode && *intervalFlag == defaultPollInterval {
 
 **Initial Discovery:**
 ```
-2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.50.118:6680
+2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.1.100:6680
 2025/10/11 14:46:29 Listen mode enabled - logging equipment changes only
 2025/10/11 14:46:29 Starting live event monitoring...
 2025/10/11 14:46:29 EVENT: Spa temperature detected: 72.0°F
@@ -872,11 +872,40 @@ pentameter --ic-ip 192.168.1.100 --listen --interval 1 2>&1 | tee /tmp/listen_te
 docker run --rm -e PENTAMETER_IC_IP=192.168.1.100 -e PENTAMETER_LISTEN=true astrostl/pentameter:latest
 ```
 
+### API Limitations: Why Polling is Required
+
+**CRITICAL:** The IntelliCenter API does **NOT** support push notifications or event streams.
+
+**Verified on 2025-11-08:**
+- Connected to IntelliCenter WebSocket for 2 minutes without sending requests
+- Cycled equipment (lights, pumps, temperature changes) during test
+- Result: **Zero unsolicited messages received**
+- Conclusion: API is strictly request/response - no push support
+
+**Implications:**
+- **Polling cannot be eliminated** - all data must be explicitly requested
+- **Event-driven listen mode is impossible** - IntelliCenter never broadcasts changes
+- **Current architecture is optimal** - persistent connection + periodic polling is the best approach
+- **2-second interval is reasonable** - balances responsiveness with network overhead
+
+**Test Utility:**
+```bash
+# Verify push notification behavior yourself
+go build -o test_push test_push.go
+./test_push --ic-ip 192.168.1.100 --duration 120s
+# Cycle equipment while test runs - no messages will be received
+```
+
+The test utility (`test_push.go`) connects and listens without sending requests. Any unsolicited messages would be logged, proving push support exists. None have ever been observed.
+
+**Why This Matters:**
+Developers may wonder "why poll when WebSockets support push?" The answer is that while WebSockets *can* support bidirectional communication, the IntelliCenter API simply doesn't implement server-to-client push. The connection stays open, but remains silent unless we explicitly request data.
+
 ### Future Enhancements
 
 Potential improvements for listen mode:
 - JSON output format for structured logging
-- WebSocket endpoint for real-time event streaming to web clients
+- WebSocket endpoint for real-time event streaming to web clients (note: this would still require polling the IntelliCenter)
 - Event filtering by equipment type or name
 - Configurable event history (show last N changes on startup)
 - Integration with external notification systems (webhooks, MQTT, etc.)
