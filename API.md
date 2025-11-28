@@ -910,18 +910,81 @@ To determine if freeze protection is **currently active** (circuits running due 
 3. Freeze protection typically activates around 36-38°F
 4. If air temp is below threshold AND freeze-enabled circuits are running when not scheduled, freeze protection is likely active
 
-**Note:** The API does not expose a direct "freeze protection active" flag. Active freeze protection must be inferred from:
-- Air temperature below freeze threshold
-- Freeze-enabled circuits running outside normal schedules
-- No user/schedule override active
+**Freeze Protection Active Indicator:**
 
-**Test Results (2025-11-28):**
+The `_FEA2` object (named "Freeze") provides a direct indicator of active freeze protection:
+
+```json
+{"objnam": "_FEA2", "params": {"SNAME": "Freeze", "STATUS": "ON", "FREEZE": "FREEZE"}}
 ```
-Air Temperature: 35°F (just above typical freeze threshold)
-Pool (C0006): FREEZE=ON, STATUS=ON
-Spa (C0001): FREEZE=ON, STATUS=ON
-Fountain (FTR02): FREEZE=ON, STATUS=OFF
+
+- **STATUS="ON"**: Freeze protection is **currently active** (circuits running due to freeze)
+- **STATUS="OFF"**: Freeze protection is **not active** (normal operation)
+
+**Detection Query:**
+```json
+{
+  "messageID": "freeze-active-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=CIRCUIT",
+  "objectList": [{"objnam": "_FEA2", "keys": ["SNAME", "STATUS"]}]
+}
+```
+
+**Test Results (2025-11-28, Freeze Protection Active):**
+```
+Air Temperature: 35°F (at freeze threshold)
+_FEA2 (Freeze): STATUS=ON  ← Direct indicator of active freeze protection
+
+Freeze-protected circuits running:
+Pool (C0006): FREEZE=ON, STATUS=ON ✓
+Spa (C0001): FREEZE=ON, STATUS=ON ✓
+Fountain (FTR02): FREEZE=ON, STATUS=ON ✓
+
+Non-freeze-protected circuits (not running):
 Spa Light (C0004): FREEZE=OFF, STATUS=OFF
+Air Blower (C0002): FREEZE=OFF, STATUS=OFF
 ```
 
-In this example, freeze protection is configured but not currently triggered (air temp 35°F is likely just above the threshold).
+**Implementation Pattern:**
+```go
+// Check if freeze protection is currently active
+func isFreezeProtectionActive(response Response) bool {
+    for _, obj := range response.ObjectList {
+        if obj.Objnam == "_FEA2" {
+            return obj.Params["STATUS"] == "ON"
+        }
+    }
+    return false
+}
+```
+
+**Important: Heater Control During Freeze Protection**
+
+When freeze protection is active, heaters may not respond to user commands or API control requests. The IntelliCenter prioritizes freeze protection over manual/scheduled heating operations:
+
+- Heater setpoints and mode changes may be ignored or delayed
+- HTMODE values may not reflect user-requested heating states
+- Circuits required for freeze protection cannot be turned off manually
+- Normal heating schedules are overridden by freeze protection logic
+
+Applications should check `_FEA2` STATUS before attempting heater control operations and display appropriate warnings to users when freeze protection is active.
+
+**Pump Speed Priority During Freeze Protection**
+
+When freeze protection is active, pump speed is determined by freeze protection settings rather than other active circuits:
+
+| Circuit | Configured Speed | Active | Actual Speed |
+|---------|------------------|--------|--------------|
+| Spa | 1800 RPM | Yes | - |
+| Heater | 3000 RPM | Yes | - |
+| Spa Jets | 3400 RPM | No | - |
+| **Freeze** | **2000 RPM** | **Yes** | **2000 RPM** ✓ |
+
+Even though the Heater circuit is active (normally requiring 3000 RPM), the pump runs at the Freeze speed (2000 RPM) because freeze protection takes priority over other circuit demands.
+
+This behavior:
+- Prioritizes freeze protection over normal heating/circulation demands
+- Uses the freeze-configured speed (sufficient for preventing pipe damage)
+- Is more energy-efficient than running at higher heating speeds
+- Overrides pump speed settings from other active circuits
