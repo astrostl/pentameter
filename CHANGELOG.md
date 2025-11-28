@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2025-11-28
+
+### Added
+- **Freeze protection status monitoring** - Circuits and features now expose freeze protection active status (STATUS=2) as a distinct metric value
+- Grafana dashboard updated to display freeze protection status with dedicated color (purple) for visual distinction
+
+### Documentation
+- Documented freeze protection API parameters (FREEZE field in circuit/feature objects)
+- Documented freeze protection active indicator behavior (STATUS=2 when freeze protection activates equipment)
+
 ## [0.3.4] - 2025-11-01
 
 ### Added
