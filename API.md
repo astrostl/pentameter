@@ -852,3 +852,76 @@ if !strings.HasSuffix(shomnu, "w") {
 - User-controlled through IntelliCenter interface
 - Automatically handles equipment/feature relationships
 - Works across different pool configurations
+
+### Freeze Protection Monitoring
+
+IntelliCenter provides freeze protection settings per circuit. The `FREEZE` parameter indicates whether freeze protection is **enabled** for each circuit (not whether it's currently active).
+
+**Query Freeze Protection Settings:**
+```json
+{
+  "messageID": "freeze-check-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=CIRCUIT",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "FREEZE"]}]
+}
+```
+
+**Response Example:**
+```json
+{
+  "objectList": [
+    {"objnam": "C0006", "params": {"SNAME": "Pool", "STATUS": "ON", "FREEZE": "ON"}},
+    {"objnam": "C0001", "params": {"SNAME": "Spa", "STATUS": "ON", "FREEZE": "ON"}},
+    {"objnam": "C0004", "params": {"SNAME": "Spa Light", "STATUS": "OFF", "FREEZE": "OFF"}},
+    {"objnam": "FTR02", "params": {"SNAME": "Fountain", "STATUS": "OFF", "FREEZE": "ON"}},
+    {"objnam": "X0046", "params": {"SNAME": "Freeze", "STATUS": "OFF", "FREEZE": "FREEZE"}}
+  ]
+}
+```
+
+**FREEZE Parameter Values:**
+- **ON**: Freeze protection is **enabled** for this circuit (will auto-activate if temp drops)
+- **OFF**: Freeze protection is **disabled** for this circuit
+- **FREEZE**: Virtual control circuit (X-prefixed) - not applicable
+
+**Key Observations:**
+- The `FREEZE` parameter indicates configuration, not current activation status
+- Physical equipment circuits (C####, FTR##) have ON/OFF values
+- Virtual circuits (X-prefixed) return "FREEZE" as a placeholder
+- Typical freeze-protected equipment: Pool pump, Spa, Fountain (water circulation)
+- Typically not freeze-protected: Lights, blower (no freeze damage risk)
+
+**Determining Active Freeze Protection:**
+
+To determine if freeze protection is **currently active** (circuits running due to freeze):
+
+1. Check air temperature via sensor query:
+```json
+{
+  "messageID": "air-temp-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=SENSE",
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "PROBE", "SUBTYP"]}]
+}
+```
+
+2. Look for `_A135` (Air Sensor) - `PROBE` value is temperature in °F
+3. Freeze protection typically activates around 36-38°F
+4. If air temp is below threshold AND freeze-enabled circuits are running when not scheduled, freeze protection is likely active
+
+**Note:** The API does not expose a direct "freeze protection active" flag. Active freeze protection must be inferred from:
+- Air temperature below freeze threshold
+- Freeze-enabled circuits running outside normal schedules
+- No user/schedule override active
+
+**Test Results (2025-11-28):**
+```
+Air Temperature: 35°F (just above typical freeze threshold)
+Pool (C0006): FREEZE=ON, STATUS=ON
+Spa (C0001): FREEZE=ON, STATUS=ON
+Fountain (FTR02): FREEZE=ON, STATUS=OFF
+Spa Light (C0004): FREEZE=OFF, STATUS=OFF
+```
+
+In this example, freeze protection is configured but not currently triggered (air temp 35°F is likely just above the threshold).
