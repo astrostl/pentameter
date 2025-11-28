@@ -398,6 +398,11 @@
                   "color": "green",
                   "index": 1,
                   "text": "ON"
+                },
+                "2": {
+                  "color": "blue",
+                  "index": 2,
+                  "text": "FREEZE"
                 }
               },
               "type": "value"
