@@ -417,22 +417,23 @@ func TestCalculateCircuitStatusValue(t *testing.T) {
 	poolMonitor.bodyHeatingStatus["spa"] = false
 
 	tests := []struct {
-		name     string
-		status   string
-		objName  string
-		expected float64
+		name          string
+		status        string
+		objName       string
+		freezeEnabled bool
+		expected      float64
 	}{
-		{"Pool Light", "ON", "C01", 1.0},
-		{"Pool Light", "OFF", "C01", 0.0},
-		{"Pool Heater", "ON", "C02", 1.0}, // Should use heating status, not circuit status
-		{"Spa Heater", "ON", "C03", 0.0},  // Spa not heating
+		{"Pool Light", "ON", "C01", false, 1.0},
+		{"Pool Light", "OFF", "C01", false, 0.0},
+		{"Pool Heater", "ON", "C02", false, 1.0}, // Should use heating status, not circuit status
+		{"Spa Heater", "ON", "C03", false, 0.0},  // Spa not heating
 	}
 
 	for _, test := range tests {
-		result := poolMonitor.calculateCircuitStatusValue(test.name, test.status, test.objName)
+		result := poolMonitor.calculateCircuitStatusValue(test.name, test.status, test.objName, test.freezeEnabled)
 		if result != test.expected {
-			t.Errorf("calculateCircuitStatusValue(%s, %s, %s): expected %.1f, got %.1f",
-				test.name, test.status, test.objName, test.expected, result)
+			t.Errorf("calculateCircuitStatusValue(%s, %s, %s, %v): expected %.1f, got %.1f",
+				test.name, test.status, test.objName, test.freezeEnabled, test.expected, result)
 		}
 	}
 }
@@ -1499,7 +1500,7 @@ func TestProcessFeatureObject(_ *testing.T) {
 		},
 	}
 
-	poolMonitor.processFeatureObject(obj, "Pool Cleaner", "ON", "CLEANER")
+	poolMonitor.processFeatureObject(obj, "Pool Cleaner", "ON", "CLEANER", false)
 
 	// Test feature with SHOMNU not ending in 'w' (should be skipped)
 	poolMonitor.featureConfig["FTR02"] = "1"
@@ -1513,7 +1514,7 @@ func TestProcessFeatureObject(_ *testing.T) {
 		},
 	}
 
-	poolMonitor.processFeatureObject(obj2, "Hidden Feature", "OFF", "HIDDEN")
+	poolMonitor.processFeatureObject(obj2, "Hidden Feature", "OFF", "HIDDEN", false)
 
 	// Test feature with no config (should process normally)
 	obj3 := ObjectData{
@@ -1525,7 +1526,7 @@ func TestProcessFeatureObject(_ *testing.T) {
 		},
 	}
 
-	poolMonitor.processFeatureObject(obj3, "Unknown Feature", "ON", "UNKNOWN")
+	poolMonitor.processFeatureObject(obj3, "Unknown Feature", "ON", "UNKNOWN", false)
 }
 
 func TestCalculateHeaterStatus(t *testing.T) {

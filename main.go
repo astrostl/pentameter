@@ -47,6 +47,16 @@ const (
 	// Circuit status constants.
 	statusOn = "ON"
 
+	// Circuit/feature status metric values.
+	circuitStatusOff             = 0.0
+	circuitStatusOn              = 1.0
+	circuitStatusFreezeProtected = 2.0
+
+	// Status description strings.
+	statusDescOff    = "OFF"
+	statusDescOn     = "ON"
+	statusDescFreeze = "FREEZE"
+
 	// Boolean string constants.
 	trueString = "true"
 
@@ -129,7 +139,7 @@ var (
 	circuitStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "circuit_status",
-			Help: "Circuit on/off status (1=on, 0=off)",
+			Help: "Circuit status (0=off, 1=on, 2=freeze protection active)",
 		},
 		[]string{"circuit", "name", "subtyp"},
 	)
@@ -163,7 +173,7 @@ var (
 	featureStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "feature_status",
-			Help: "Feature on/off status (1=on, 0=off)",
+			Help: "Feature status (0=off, 1=on, 2=freeze protection active)",
 		},
 		[]string{"feature", "name", "subtyp"},
 	)
@@ -177,6 +187,7 @@ type PoolMonitor struct {
 	referencedHeaters      map[string]BodyHeaterInfo // Track body-to-heater assignments
 	pendingRequests        map[string]time.Time      // Track messageID -> request time
 	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
+	circuitFreezeConfig    map[string]bool           // Track circuit objnam -> freeze protection enabled
 	previousState          *EquipmentState           // Previous state for change detection
 	intelliCenterURL       string
 	intelliCenterIP        string // Store IP separately for re-discovery
@@ -185,6 +196,7 @@ type PoolMonitor struct {
 	connected              bool
 	debugMode              bool // Enable enhanced debugging
 	listenMode             bool // Enable live event logging mode
+	freezeProtectionActive bool // Track if freeze protection is currently active
 	consecutiveFailures    int  // Track consecutive connection failures for re-discovery
 	failureThreshold       int  // Number of failures before attempting re-discovery
 	inRediscoveryMode      bool // Currently attempting re-discovery
@@ -239,9 +251,11 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listen
 		referencedHeaters:      make(map[string]BodyHeaterInfo),
 		pendingRequests:        make(map[string]time.Time),
 		featureConfig:          make(map[string]string),
+		circuitFreezeConfig:    make(map[string]bool),
 		previousState:          nil,
 		debugMode:              debugMode,
 		listenMode:             listenMode,
+		freezeProtectionActive: false,
 		consecutiveFailures:    0,
 		failureThreshold:       defaultFailureThreshold,
 		inRediscoveryMode:      false,
@@ -329,6 +343,11 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 	// Get pump data
 	if err := pm.getPumpData(); err != nil {
 		return fmt.Errorf("failed to get pump data: %w", err)
+	}
+
+	// Get freeze protection status (must be before circuit status)
+	if err := pm.getFreezeProtectionStatus(); err != nil {
+		return fmt.Errorf("failed to get freeze protection status: %w", err)
 	}
 
 	// Get circuit status
@@ -599,6 +618,69 @@ func (pm *PoolMonitor) getPumpData() error {
 	return nil
 }
 
+func (pm *PoolMonitor) getFreezeProtectionStatus() error {
+	// Query the _FEA2 object which indicates active freeze protection
+	messageID := fmt.Sprintf("freeze-status-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+	sentTime := time.Now()
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:   "GetParamList",
+		Condition: "OBJTYP=CIRCUIT",
+		ObjectList: []ObjectQuery{
+			{
+				ObjName: "_FEA2",
+				Keys:    []string{"SNAME", "STATUS"},
+			},
+		},
+	}
+
+	pm.pendingRequests[messageID] = sentTime
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send freeze protection status request: %w", err)
+	}
+
+	var resp IntelliCenterResponse
+	if err := pm.conn.ReadJSON(&resp); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read freeze protection status response: %w", err)
+	}
+
+	if resp.MessageID != messageID {
+		delete(pm.pendingRequests, messageID)
+		if !pm.listenMode {
+			pm.connected = false
+			return fmt.Errorf("freeze status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
+		}
+		log.Printf("WARNING: Freeze status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
+		return fmt.Errorf("freeze status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("freeze protection status API request failed with response: %s", resp.Response)
+	}
+
+	// Check _FEA2 status to determine if freeze protection is active
+	pm.freezeProtectionActive = false
+	for _, obj := range resp.ObjectList {
+		if obj.ObjName == "_FEA2" && obj.Params["STATUS"] == statusOn {
+			pm.freezeProtectionActive = true
+			pm.logIfNotListeningf("Freeze protection is ACTIVE")
+			break
+		}
+	}
+
+	if !pm.freezeProtectionActive {
+		pm.logIfNotListeningf("Freeze protection is inactive")
+	}
+
+	return nil
+}
+
 func (pm *PoolMonitor) getCircuitStatus() error {
 	resp, err := pm.requestCircuitData()
 	if err != nil {
@@ -624,7 +706,7 @@ func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 		ObjectList: []ObjectQuery{
 			{
 				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "OBJTYP", "SUBTYP"},
+				Keys:    []string{"SNAME", "STATUS", "OBJTYP", "SUBTYP", "FREEZE"},
 			},
 		},
 	}
@@ -665,6 +747,7 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 	name := obj.Params["SNAME"]
 	status := obj.Params["STATUS"]
 	subtype := obj.Params["SUBTYP"]
+	freezeEnabled := obj.Params["FREEZE"] == statusOn
 
 	if name == "" || status == "" {
 		return
@@ -672,9 +755,9 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 
 	// Separate features (FTR) from circuits (C)
 	if strings.HasPrefix(obj.ObjName, "FTR") {
-		pm.processFeatureObject(obj, name, status, subtype)
+		pm.processFeatureObject(obj, name, status, subtype, freezeEnabled)
 	} else if pm.isValidCircuit(obj.ObjName, name, subtype) {
-		statusValue := pm.calculateCircuitStatusValue(name, status, obj.ObjName)
+		statusValue := pm.calculateCircuitStatusValue(name, status, obj.ObjName, freezeEnabled)
 		circuitStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
 		pm.trackCircuit(name, status)
 	}
@@ -686,12 +769,12 @@ func (pm *PoolMonitor) isValidCircuit(objName, name, subtype string) bool {
 	return hasValidPrefix && !isGenericAux
 }
 
-func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtype string) {
+func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtype string, freezeEnabled bool) {
 	// Check if feature should be shown based on IntelliCenter's "Show as Feature" setting
 	shomnu, exists := pm.featureConfig[obj.ObjName]
 	if !exists || strings.HasSuffix(shomnu, "w") {
 		// Feature should be shown - continue to processing
-		pm.processVisibleFeature(obj, name, status, subtype)
+		pm.processVisibleFeature(obj, name, status, subtype, freezeEnabled)
 		return
 	}
 
@@ -714,40 +797,57 @@ func (pm *PoolMonitor) logSkippedFeature(name, objName, shomnu string) {
 	}
 }
 
-func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subtype string) {
-	// Calculate feature status value
-	statusValue := 0.0
+func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subtype string, freezeEnabled bool) {
+	// Calculate feature status value with freeze protection support
+	statusValue := circuitStatusOff
+	statusDesc := statusDescOff
+
 	if status == statusOn {
-		statusValue = 1.0
+		// Check if freeze protection is active and this feature has freeze protection enabled
+		if pm.freezeProtectionActive && freezeEnabled {
+			statusValue = circuitStatusFreezeProtected
+			statusDesc = statusDescFreeze
+		} else {
+			statusValue = circuitStatusOn
+			statusDesc = statusDescOn
+		}
 	}
 
 	// Update Prometheus metric using IntelliCenter's SUBTYP
 	featureStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
 	pm.trackFeature(name, status)
 
-	pm.logIfNotListeningf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, status, statusValue)
+	pm.logIfNotListeningf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, statusDesc, statusValue)
 }
 
-func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string) float64 {
+func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string, freezeEnabled bool) float64 {
 	isHeaterCircuit := strings.Contains(strings.ToLower(name), "heat")
 
 	if isHeaterCircuit {
-		return pm.getHeaterCircuitStatus(name, objName)
+		return pm.getHeaterCircuitStatus(name, objName, freezeEnabled)
 	}
 
-	return pm.getRegularCircuitStatus(name, status, objName)
+	return pm.getRegularCircuitStatus(name, status, objName, freezeEnabled)
 }
 
-func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string) float64 {
+func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string, freezeEnabled bool) float64 {
 	bodyName := pm.getBodyNameFromCircuit(name)
-	statusValue := 0.0
+	statusValue := circuitStatusOff
+	statusDesc := statusDescOff
 
 	if bodyName != "" && pm.bodyHeatingStatus[bodyName] {
-		statusValue = 1.0
+		// Check if freeze protection is active and this circuit has freeze protection enabled
+		if pm.freezeProtectionActive && freezeEnabled {
+			statusValue = circuitStatusFreezeProtected
+			statusDesc = statusDescFreeze
+		} else {
+			statusValue = circuitStatusOn
+			statusDesc = statusDescOn
+		}
 	}
 
-	pm.logIfNotListeningf("Updated heater circuit status: %s (%s) = [%.0f] (Body: %s, Heating: %v)",
-		name, objName, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
+	pm.logIfNotListeningf("Updated heater circuit status: %s (%s) = %s [%.0f] (Body: %s, Heating: %v)",
+		name, objName, statusDesc, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
 
 	return statusValue
 }
@@ -763,13 +863,22 @@ func (pm *PoolMonitor) getBodyNameFromCircuit(name string) string {
 	return ""
 }
 
-func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string) float64 {
-	statusValue := 0.0
+func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string, freezeEnabled bool) float64 {
+	statusValue := circuitStatusOff
+	statusDesc := statusDescOff
+
 	if status == statusOn {
-		statusValue = 1.0
+		// Check if freeze protection is active and this circuit has freeze protection enabled
+		if pm.freezeProtectionActive && freezeEnabled {
+			statusValue = circuitStatusFreezeProtected
+			statusDesc = statusDescFreeze
+		} else {
+			statusValue = circuitStatusOn
+			statusDesc = statusDescOn
+		}
 	}
 
-	pm.logIfNotListeningf("Updated circuit status: %s (%s) = %s [%.0f]", name, objName, status, statusValue)
+	pm.logIfNotListeningf("Updated circuit status: %s (%s) = %s [%.0f]", name, objName, statusDesc, statusValue)
 	return statusValue
 }
 
