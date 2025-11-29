@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,16 +35,23 @@ const (
 	backoffFactor       = 2.0
 	healthCheckInterval = 30 * time.Second
 	defaultPollInterval = 60
+	minPollInterval     = 5
 	complexityThreshold = 15
 	httpReadTimeout     = 15 * time.Second
 	httpWriteTimeout    = 15 * time.Second
 	httpIdleTimeout     = 60 * time.Second
 
-	// Listen mode polling interval (rapid polling for change detection).
-	listenModePollInterval = 2
+	// Listen mode polling interval (catches equipment that doesn't push).
+	listenModePollInterval = 10
 
 	// Re-discovery failure threshold (number of consecutive failures before attempting re-discovery).
 	defaultFailureThreshold = 3
+
+	// Maximum number of unsolicited messages to skip when waiting for a response.
+	maxUnsolicitedMessages = 10
+
+	// Read timeout for waiting for response (allows time to receive and skip push notifications).
+	responseReadTimeout = 30 * time.Second
 
 	// Circuit status constants.
 	statusOn = "ON"
@@ -180,6 +189,7 @@ var (
 )
 
 type PoolMonitor struct {
+	mu                     sync.Mutex                // Protects concurrent access in listen mode
 	lastHealthCheck        time.Time
 	lastRefresh            time.Time
 	conn                   *websocket.Conn
@@ -194,8 +204,8 @@ type PoolMonitor struct {
 	intelliCenterPort      string // Store port for URL reconstruction
 	retryConfig            RetryConfig
 	connected              bool
-	debugMode              bool // Enable enhanced debugging
 	listenMode             bool // Enable live event logging mode
+	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool // Track if freeze protection is currently active
 	consecutiveFailures    int  // Track consecutive connection failures for re-discovery
 	failureThreshold       int  // Number of failures before attempting re-discovery
@@ -214,6 +224,7 @@ type EquipmentState struct {
 	ParseErrors     map[string]bool    // Track parse errors we've already logged
 	SkippedFeatures map[string]bool    // Track skipped features we've already logged
 	AirTemp         float64
+	PollChangeCount int                // Count changes detected during current poll
 }
 
 type BodyHeaterInfo struct {
@@ -234,7 +245,7 @@ type RetryConfig struct {
 	HealthCheckRate time.Duration
 }
 
-func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listenMode bool) *PoolMonitor {
+func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) *PoolMonitor {
 	return &PoolMonitor{
 		intelliCenterURL:  fmt.Sprintf("ws://%s", net.JoinHostPort(intelliCenterIP, intelliCenterPort)),
 		intelliCenterIP:   intelliCenterIP,
@@ -253,7 +264,6 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, debugMode, listen
 		featureConfig:          make(map[string]string),
 		circuitFreezeConfig:    make(map[string]bool),
 		previousState:          nil,
-		debugMode:              debugMode,
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
 		consecutiveFailures:    0,
@@ -323,6 +333,310 @@ func (pm *PoolMonitor) calculateBackoffDelay(attempt int) time.Duration {
 func (pm *PoolMonitor) validateResponse(messageID string) {
 	// Remove from pending requests
 	delete(pm.pendingRequests, messageID)
+}
+
+// readResponseWithPushHandling reads from the WebSocket, skipping any unsolicited
+// push notifications until we receive the response matching our messageID.
+// Push notifications from IntelliCenter have their own messageIDs and are sent
+// when equipment state changes. We log these in listen/debug mode.
+func (pm *PoolMonitor) readResponseWithPushHandling(expectedMessageID string) (*IntelliCenterResponse, error) {
+	// Set read deadline to avoid hanging forever
+	if err := pm.conn.SetReadDeadline(time.Now().Add(responseReadTimeout)); err != nil {
+		return nil, fmt.Errorf("failed to set read deadline: %w", err)
+	}
+	defer func() {
+		// Clear the deadline after we're done
+		_ = pm.conn.SetReadDeadline(time.Time{})
+	}()
+
+	for i := 0; i < maxUnsolicitedMessages; i++ {
+		var resp IntelliCenterResponse
+		if err := pm.conn.ReadJSON(&resp); err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Check if this is our expected response
+		if resp.MessageID == expectedMessageID {
+			return &resp, nil
+		}
+
+		// This is an unsolicited push notification from IntelliCenter
+		// Log it in listen mode for visibility
+		if pm.listenMode {
+			pm.logPushNotification(&resp)
+		}
+		// Continue reading to get our actual response
+	}
+
+	return nil, fmt.Errorf("exceeded maximum unsolicited messages (%d) while waiting for response %s",
+		maxUnsolicitedMessages, expectedMessageID)
+}
+
+// logPushNotification logs details about an unsolicited push notification from IntelliCenter.
+// This is called during polling when we receive a push while waiting for our response.
+// Since the listen loop handles pushes properly, we just log a brief note here.
+func (pm *PoolMonitor) logPushNotification(resp *IntelliCenterResponse) {
+	// Don't log - the listen loop will handle this push notification properly
+	// We just skip it here to avoid duplicate/incomplete logging
+}
+
+// readGenericResponseWithPushHandling reads from the WebSocket, skipping any unsolicited
+// push notifications until we receive the response matching our messageID.
+// This variant handles generic map responses (used by GetQuery/GetConfiguration).
+func (pm *PoolMonitor) readGenericResponseWithPushHandling(expectedMessageID string) (map[string]interface{}, error) {
+	// Set read deadline to avoid hanging forever
+	if err := pm.conn.SetReadDeadline(time.Now().Add(responseReadTimeout)); err != nil {
+		return nil, fmt.Errorf("failed to set read deadline: %w", err)
+	}
+	defer func() {
+		// Clear the deadline after we're done
+		_ = pm.conn.SetReadDeadline(time.Time{})
+	}()
+
+	for i := 0; i < maxUnsolicitedMessages; i++ {
+		var resp map[string]interface{}
+		if err := pm.conn.ReadJSON(&resp); err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Check if this is our expected response
+		if msgID, ok := resp["messageID"].(string); ok && msgID == expectedMessageID {
+			return resp, nil
+		}
+
+		// This is an unsolicited push notification from IntelliCenter
+		// Log it in listen mode for visibility
+		if pm.listenMode {
+			pm.logGenericPushNotification(resp)
+		}
+		// Continue reading to get our actual response
+	}
+
+	return nil, fmt.Errorf("exceeded maximum unsolicited messages (%d) while waiting for response %s",
+		maxUnsolicitedMessages, expectedMessageID)
+}
+
+// logGenericPushNotification logs details about an unsolicited push notification (generic format).
+// This is called during polling when we receive a push while waiting for our response.
+// Since the listen loop handles pushes properly, we just skip it here.
+func (pm *PoolMonitor) logGenericPushNotification(resp map[string]interface{}) {
+	// Don't log - the listen loop will handle this push notification properly
+}
+
+// StartEventListener runs a hybrid listen mode.
+// It listens for real-time push notifications AND polls periodically to catch
+// equipment types that IntelliCenter doesn't push (like pump RPM changes).
+func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time.Duration) {
+	// Initialize state tracking
+	pm.initializeState()
+
+	// Do one initial poll to establish baseline state
+	log.Println("Fetching initial equipment state...")
+	if err := pm.GetTemperatures(ctx); err != nil {
+		log.Printf("Warning: initial state fetch failed: %v", err)
+	}
+	pm.initialPollDone = true
+	log.Println("Listening for real-time changes (Ctrl+C to stop)...")
+
+	// Create a separate poller with its own connection
+	poller := &PoolMonitor{
+		intelliCenterIP:     pm.intelliCenterIP,
+		intelliCenterPort:   pm.intelliCenterPort,
+		intelliCenterURL:    pm.intelliCenterURL,
+		retryConfig:         pm.retryConfig,
+		listenMode:          pm.listenMode,
+		initialPollDone:     true, // Initial poll already done by main monitor
+		previousState:       pm.previousState, // Share state for change detection
+		bodyHeatingStatus:   pm.bodyHeatingStatus,
+		referencedHeaters:   pm.referencedHeaters,
+		pendingRequests:     make(map[string]time.Time),
+		featureConfig:       pm.featureConfig,
+		circuitFreezeConfig: pm.circuitFreezeConfig,
+	}
+
+	// Start poller in background with its own connection
+	go pm.pollLoop(ctx, poller, pollInterval)
+
+	// Listen for push notifications in foreground using main connection
+	pm.listenLoop(ctx)
+}
+
+// pollLoop polls periodically to catch equipment that doesn't push.
+// Uses a separate connection to avoid conflicts with the listen loop.
+func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Connect the poller
+	if err := poller.EnsureConnected(ctx); err != nil {
+		log.Printf("Poller connection failed: %v", err)
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			if poller.conn != nil {
+				poller.conn.Close()
+			}
+			return
+		case <-ticker.C:
+			pm.mu.Lock()
+			pm.previousState.PollChangeCount = 0
+			err := poller.GetTemperatures(ctx)
+			changes := pm.previousState.PollChangeCount
+			pm.mu.Unlock()
+			if err != nil {
+				log.Printf("Poll error: %v", err)
+				// Try to reconnect poller
+				if err := poller.EnsureConnected(ctx); err != nil {
+					log.Printf("Poller reconnection failed: %v", err)
+				}
+			} else if changes == 0 {
+				log.Println("POLL: [no changes]")
+			}
+		}
+	}
+}
+
+// listenLoop listens for push notifications.
+func (pm *PoolMonitor) listenLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Event listener stopped")
+			return
+		default:
+			var rawMsg map[string]interface{}
+			if err := pm.conn.ReadJSON(&rawMsg); err != nil {
+				log.Printf("Connection error: %v", err)
+				if err := pm.EnsureConnected(ctx); err != nil {
+					log.Printf("Reconnection failed: %v", err)
+					time.Sleep(5 * time.Second)
+				} else {
+					// Reconnected - reset state to get full report on next poll
+					pm.mu.Lock()
+					pm.initialPollDone = false
+					pm.previousState = nil
+					pm.initializeState()
+					log.Println("Reconnected - fetching full equipment state...")
+					if err := pm.GetTemperatures(ctx); err != nil {
+						log.Printf("Warning: state fetch failed: %v", err)
+					}
+					pm.initialPollDone = true
+					pm.mu.Unlock()
+				}
+				continue
+			}
+
+			pm.mu.Lock()
+			pm.processRawPushNotification(rawMsg)
+			pm.mu.Unlock()
+		}
+	}
+}
+
+// processRawPushNotification handles raw JSON push notifications.
+// Logs everything received, then processes known types.
+func (pm *PoolMonitor) processRawPushNotification(msg map[string]interface{}) {
+	objectList, ok := msg["objectList"].([]interface{})
+	if !ok || len(objectList) == 0 {
+		// No objectList - log raw message
+		jsonBytes, _ := json.Marshal(msg)
+		log.Printf("RAW: %s", string(jsonBytes))
+		return
+	}
+
+	for _, item := range objectList {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Push notifications have a "changes" array inside each objectList item
+		changes, ok := itemMap["changes"].([]interface{})
+		if !ok {
+			// No changes array - log the raw item
+			jsonBytes, _ := json.Marshal(itemMap)
+			log.Printf("RAW: %s", string(jsonBytes))
+			continue
+		}
+
+		for _, change := range changes {
+			changeMap, ok := change.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			objnam, _ := changeMap["objnam"].(string)
+			paramsRaw, ok := changeMap["params"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			// Convert to ObjectData struct (same as polling uses)
+			params := make(map[string]string)
+			for k, v := range paramsRaw {
+				if s, ok := v.(string); ok {
+					params[k] = s
+				} else {
+					params[k] = fmt.Sprintf("%v", v)
+				}
+			}
+
+			obj := ObjectData{
+				ObjName: objnam,
+				Params:  params,
+			}
+
+			// Use the same processing functions as polling
+			pm.processPushObject(obj)
+		}
+	}
+}
+
+// processPushObject routes a push notification to the appropriate handler.
+// Uses the same processing functions as polling mode, then logs a human-readable summary.
+func (pm *PoolMonitor) processPushObject(obj ObjectData) {
+	objType := obj.Params["OBJTYP"]
+	name := obj.Params["SNAME"]
+	if name == "" {
+		name = obj.ObjName
+	}
+
+	// Use the same processing functions as polling mode, then log the change.
+	switch objType {
+	case "BODY":
+		referencedHeaters := make(map[string]BodyHeaterInfo)
+		pm.processBodyObject(obj, referencedHeaters)
+		for k, v := range referencedHeaters {
+			pm.referencedHeaters[k] = v
+		}
+		// Log human-readable body state
+		log.Printf("PUSH: %s temp=%s°F setpoint=%s°F htmode=%s status=%s",
+			name, obj.Params["TEMP"], obj.Params["SETPT"], obj.Params["HTMODE"], obj.Params["STATUS"])
+
+	case "PUMP":
+		if err := pm.processPumpObject(obj, 0); err != nil {
+			log.Printf("PUSH: %s pump error: %v", name, err)
+		} else {
+			log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
+				name, obj.Params["RPM"], obj.Params["PWR"], obj.Params["STATUS"])
+		}
+
+	case "CIRCUIT":
+		pm.processCircuitObject(obj)
+		log.Printf("PUSH: %s status=%s", name, obj.Params["STATUS"])
+
+	case "HEATER":
+		pm.processHeaterObject(obj)
+		log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params["STATUS"], obj.Params["MODE"])
+
+	default:
+		// Unknown type - log raw JSON
+		jsonBytes, _ := json.Marshal(obj.Params)
+		log.Printf("PUSH: unknown %s: %s", obj.ObjName, string(jsonBytes))
+	}
 }
 
 func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
@@ -416,23 +730,11 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Read response
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
-	// Validate response correlation
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false // Mark as disconnected to trigger reconnection (not in listen mode)
-			log.Printf("ERROR: Body temp messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
-			return nil, fmt.Errorf("messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Body temp messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return nil, fmt.Errorf("messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
+		return nil, err
 	}
 
 	// Clean up pending request
@@ -442,7 +744,7 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 		return nil, fmt.Errorf("API request failed with response: %s", resp.Response)
 	}
 
-	return &resp, nil
+	return resp, nil
 }
 
 func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[string]BodyHeaterInfo) {
@@ -553,22 +855,11 @@ func (pm *PoolMonitor) getAirTemperature() error {
 		return fmt.Errorf("failed to send air temp request: %w", err)
 	}
 
-	// Read response
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return fmt.Errorf("failed to read air temp response: %w", err)
-	}
-
-	// Validate response correlation
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			return fmt.Errorf("air temp messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Air temp messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return fmt.Errorf("air temp messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	// Clean up pending request
@@ -642,20 +933,11 @@ func (pm *PoolMonitor) getFreezeProtectionStatus() error {
 		return fmt.Errorf("failed to send freeze protection status request: %w", err)
 	}
 
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return fmt.Errorf("failed to read freeze protection status response: %w", err)
-	}
-
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			return fmt.Errorf("freeze status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Freeze status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return fmt.Errorf("freeze status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -718,20 +1000,11 @@ func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 		return nil, fmt.Errorf("failed to send circuit status request: %w", err)
 	}
 
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return nil, fmt.Errorf("failed to read circuit status response: %w", err)
-	}
-
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			return nil, fmt.Errorf("circuit status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Circuit status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return nil, fmt.Errorf("circuit status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -740,7 +1013,7 @@ func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 		return nil, fmt.Errorf("circuit status API request failed with response: %s", resp.Response)
 	}
 
-	return &resp, nil
+	return resp, nil
 }
 
 func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
@@ -910,20 +1183,11 @@ func (pm *PoolMonitor) getThermalStatus() error {
 		return fmt.Errorf("failed to send thermal status request: %w", err)
 	}
 
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return fmt.Errorf("failed to read thermal status response: %w", err)
-	}
-
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			return fmt.Errorf("thermal status messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Thermal status messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return fmt.Errorf("thermal status messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -1075,36 +1339,21 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 		return nil, 0, fmt.Errorf("failed to send pump data request: %w", err)
 	}
 
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	responseTime := time.Since(sentTime)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return nil, 0, fmt.Errorf("failed to read pump data response: %w", err)
 	}
 
-	responseTime := time.Since(sentTime)
-
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			log.Printf("ERROR: Pump data messageID mismatch! Sent: %s, Received: %s - FORCING RECONNECTION", messageID, resp.MessageID)
-			return nil, 0, fmt.Errorf("pump data messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: Pump data messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return nil, 0, fmt.Errorf("pump data messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
-	}
-
 	pm.validateResponse(messageID)
-
-	if pm.debugMode && responseTime < 5*time.Millisecond {
-		log.Printf("WARNING: Suspiciously fast pump data response (%v) - possible cached data", responseTime)
-	}
 
 	if resp.Response != "200" {
 		return nil, 0, fmt.Errorf("pump data API request failed with response: %s", resp.Response)
 	}
 
-	return &resp, responseTime, nil
+	return resp, responseTime, nil
 }
 
 func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Duration) error {
@@ -1158,7 +1407,10 @@ func (pm *PoolMonitor) EnsureConnected(ctx context.Context) error {
 		return nil
 	}
 
-	log.Println("Connection unhealthy, attempting to reconnect...")
+	// Only log reconnect message if we were previously connected
+	if pm.conn != nil {
+		log.Println("Connection unhealthy, attempting to reconnect...")
+	}
 	if err := pm.Close(); err != nil {
 		log.Printf("Warning: failed to close connection: %v", err)
 	}
@@ -1342,17 +1594,11 @@ func (pm *PoolMonitor) LoadFeatureConfiguration(_ context.Context) error {
 		return fmt.Errorf("failed to send configuration request: %w", err)
 	}
 
-	// Read response
-	var resp map[string]interface{}
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readGenericResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return fmt.Errorf("failed to read configuration response: %w", err)
-	}
-
-	// Validate response correlation
-	if respMessageID, ok := resp["messageID"].(string); !ok || respMessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		return fmt.Errorf("messageID mismatch: sent %s, received %v", messageID, resp["messageID"])
 	}
 
 	delete(pm.pendingRequests, messageID)
@@ -1412,6 +1658,12 @@ func (pm *PoolMonitor) initializeState() {
 	}
 }
 
+// logPollChange logs a change and increments the change counter.
+func (pm *PoolMonitor) logPollChange(format string, args ...interface{}) {
+	log.Printf("POLL: "+format, args...)
+	pm.previousState.PollChangeCount++
+}
+
 func (pm *PoolMonitor) trackWaterTemp(name string, temp float64) {
 	if !pm.listenMode {
 		return
@@ -1422,11 +1674,12 @@ func (pm *PoolMonitor) trackWaterTemp(name string, temp float64) {
 
 	prevTemp, exists := pm.previousState.WaterTemps[name]
 	if !exists {
-		// First time seeing this equipment
-		log.Printf("EVENT: %s temperature detected: %.1f°F", name, temp)
+		// First time seeing this equipment - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: %s temperature detected: %.1f°F", name, temp)
+		}
 	} else if prevTemp != temp {
-		// Value changed
-		log.Printf("EVENT: %s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
+		pm.logPollChange("%s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
 	}
 	pm.previousState.WaterTemps[name] = temp
 }
@@ -1440,11 +1693,12 @@ func (pm *PoolMonitor) trackAirTemp(temp float64) {
 	}
 
 	if pm.previousState.AirTemp == 0 {
-		// First time seeing air temp
-		log.Printf("EVENT: Air temperature detected: %.1f°F", temp)
+		// First time seeing air temp - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: Air temperature detected: %.1f°F", temp)
+		}
 	} else if pm.previousState.AirTemp != temp {
-		// Temperature changed
-		log.Printf("EVENT: Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
+		pm.logPollChange("Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
 	}
 	pm.previousState.AirTemp = temp
 }
@@ -1459,11 +1713,12 @@ func (pm *PoolMonitor) trackPumpRPM(name string, rpm float64) {
 
 	prevRPM, exists := pm.previousState.PumpRPMs[name]
 	if !exists {
-		// First time seeing this pump
-		log.Printf("EVENT: %s detected: %.0f RPM", name, rpm)
+		// First time seeing this pump - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: %s detected: %.0f RPM", name, rpm)
+		}
 	} else if prevRPM != rpm {
-		// RPM changed
-		log.Printf("EVENT: %s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
+		pm.logPollChange("%s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
 	}
 	pm.previousState.PumpRPMs[name] = rpm
 }
@@ -1478,11 +1733,12 @@ func (pm *PoolMonitor) trackCircuit(name, status string) {
 
 	prevStatus, exists := pm.previousState.Circuits[name]
 	if !exists {
-		// First time seeing this circuit
-		log.Printf("EVENT: %s detected: %s", name, status)
+		// First time seeing this circuit - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: %s detected: %s", name, status)
+		}
 	} else if prevStatus != status {
-		// Status changed
-		log.Printf("EVENT: %s turned %s", name, status)
+		pm.logPollChange("%s turned %s", name, status)
 	}
 	pm.previousState.Circuits[name] = status
 }
@@ -1497,11 +1753,12 @@ func (pm *PoolMonitor) trackThermal(name string, status int) {
 
 	prevStatus, exists := pm.previousState.Thermals[name]
 	if !exists {
-		// First time seeing this thermal equipment
-		log.Printf("EVENT: %s detected: %s", name, pm.getStatusDescription(status))
+		// First time seeing this thermal equipment - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: %s detected: %s", name, pm.getStatusDescription(status))
+		}
 	} else if prevStatus != status {
-		// Status changed
-		log.Printf("EVENT: %s status changed: %s → %s", name,
+		pm.logPollChange("%s status changed: %s → %s", name,
 			pm.getStatusDescription(prevStatus), pm.getStatusDescription(status))
 	}
 	pm.previousState.Thermals[name] = status
@@ -1517,11 +1774,12 @@ func (pm *PoolMonitor) trackFeature(name, status string) {
 
 	prevStatus, exists := pm.previousState.Features[name]
 	if !exists {
-		// First time seeing this feature
-		log.Printf("EVENT: %s detected: %s", name, status)
+		// First time seeing this feature - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: %s detected: %s", name, status)
+		}
 	} else if prevStatus != status {
-		// Status changed
-		log.Printf("EVENT: %s turned %s", name, status)
+		pm.logPollChange("%s turned %s", name, status)
 	}
 	pm.previousState.Features[name] = status
 }
@@ -1548,20 +1806,11 @@ func (pm *PoolMonitor) getAllObjects() error {
 		return fmt.Errorf("failed to send all objects request: %w", err)
 	}
 
-	var resp IntelliCenterResponse
-	if err := pm.conn.ReadJSON(&resp); err != nil {
+	// Read response, handling any push notifications that arrive first
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
 		delete(pm.pendingRequests, messageID)
 		return fmt.Errorf("failed to read all objects response: %w", err)
-	}
-
-	if resp.MessageID != messageID {
-		delete(pm.pendingRequests, messageID)
-		if !pm.listenMode {
-			pm.connected = false
-			return fmt.Errorf("all objects messageID mismatch: sent %s, received %s - forcing reconnection", messageID, resp.MessageID)
-		}
-		log.Printf("WARNING: All objects messageID mismatch! Sent: %s, Received: %s (continuing in listen mode)", messageID, resp.MessageID)
-		return fmt.Errorf("all objects messageID mismatch: sent %s, received %s", messageID, resp.MessageID)
 	}
 
 	pm.validateResponse(messageID)
@@ -1611,7 +1860,10 @@ func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
 
 	// Log equipment changes with appropriate format
 	if !exists {
-		pm.logUnknownEquipmentDetected(name, obj.ObjName, objType, status)
+		// Only log on initial poll
+		if !pm.initialPollDone {
+			pm.logUnknownEquipmentDetected(name, obj.ObjName, objType, status)
+		}
 	} else if prevValue != trackingValue {
 		pm.logUnknownEquipmentChanged(name, obj.ObjName, prevValue, trackingValue)
 	}
@@ -1621,18 +1873,18 @@ func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
 
 func (pm *PoolMonitor) logUnknownEquipmentDetected(name, objName, objType, status string) {
 	if name != "" {
-		log.Printf("EVENT: Unknown equipment detected - %s (%s) type=%s status=%s", name, objName, objType, status)
+		log.Printf("POLL: Unknown equipment detected - %s (%s) type=%s status=%s", name, objName, objType, status)
 		return
 	}
-	log.Printf("EVENT: Unknown equipment detected - %s type=%s status=%s", objName, objType, status)
+	log.Printf("POLL: Unknown equipment detected - %s type=%s status=%s", objName, objType, status)
 }
 
 func (pm *PoolMonitor) logUnknownEquipmentChanged(name, objName, prevValue, trackingValue string) {
 	if name != "" {
-		log.Printf("EVENT: Unknown equipment changed - %s (%s) %s → %s", name, objName, prevValue, trackingValue)
+		log.Printf("POLL: Unknown equipment changed - %s (%s) %s → %s", name, objName, prevValue, trackingValue)
 		return
 	}
-	log.Printf("EVENT: Unknown equipment changed - %s %s → %s", objName, prevValue, trackingValue)
+	log.Printf("POLL: Unknown equipment changed - %s %s → %s", objName, prevValue, trackingValue)
 }
 
 func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Handler {
@@ -1643,7 +1895,6 @@ type appConfig struct {
 	intelliCenterIP   string
 	intelliCenterPort string
 	httpPort          string
-	debugMode         bool
 	listenMode        bool
 	pollInterval      time.Duration
 }
@@ -1653,7 +1904,6 @@ func parseCommandLineFlags() *appConfig {
 		"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)")
 	intelliCenterPort := flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"), "IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)")
 	httpPort := flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"), "HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)")
-	debugMode := flag.Bool("debug", getEnvOrDefault("PENTAMETER_DEBUG", "false") == trueString, "Enable enhanced debugging (env: PENTAMETER_DEBUG)")
 	listenMode := flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
 		"Enable live event logging mode (rapid polling, log changes only) (env: PENTAMETER_LISTEN)")
 	pollIntervalSeconds := flag.Int("interval", func() int {
@@ -1662,7 +1912,7 @@ func parseCommandLineFlags() *appConfig {
 				return val
 			}
 		}
-		return defaultPollInterval
+		return 0 // 0 means "use mode-specific default"
 	}(), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)")
 	showVersion := flag.Bool("version", false, "Show version information")
 	discoverOnly := flag.Bool("discover", false, "Discover IntelliCenter IP address and exit")
@@ -1684,9 +1934,21 @@ func parseCommandLineFlags() *appConfig {
 		os.Exit(0)
 	}
 
-	pollInterval := time.Duration(*pollIntervalSeconds) * time.Second
-	if *listenMode && *pollIntervalSeconds == defaultPollInterval {
+	// Determine poll interval
+	// 0 means use mode-specific default
+	var pollInterval time.Duration
+	if *pollIntervalSeconds > 0 {
+		if *pollIntervalSeconds < minPollInterval {
+			log.Printf("Warning: interval %ds is below minimum (%ds), using %ds",
+				*pollIntervalSeconds, minPollInterval, minPollInterval)
+			pollInterval = minPollInterval * time.Second
+		} else {
+			pollInterval = time.Duration(*pollIntervalSeconds) * time.Second
+		}
+	} else if *listenMode {
 		pollInterval = listenModePollInterval * time.Second
+	} else {
+		pollInterval = defaultPollInterval * time.Second
 	}
 
 	// If no IP provided, attempt auto-discovery
@@ -1706,7 +1968,6 @@ func parseCommandLineFlags() *appConfig {
 		intelliCenterIP:   *intelliCenterIP,
 		intelliCenterPort: *intelliCenterPort,
 		httpPort:          *httpPort,
-		debugMode:         *debugMode,
 		listenMode:        *listenMode,
 		pollInterval:      pollInterval,
 	}
@@ -1715,14 +1976,10 @@ func parseCommandLineFlags() *appConfig {
 func logStartupMessage(cfg *appConfig) {
 	log.Printf("Starting pool monitor for IntelliCenter at %s:%s", cfg.intelliCenterIP, cfg.intelliCenterPort)
 	if cfg.listenMode {
-		log.Printf("Listen mode enabled - logging equipment changes only")
-		log.Printf("Polling interval: %v (rapid polling for change detection)", cfg.pollInterval)
+		log.Printf("Listen mode enabled - real-time push + polling every %v", cfg.pollInterval)
 	} else {
 		log.Printf("HTTP server will run on port %s", cfg.httpPort)
 		log.Printf("Polling interval: %v", cfg.pollInterval)
-	}
-	if cfg.debugMode {
-		log.Printf("Enhanced debugging enabled")
 	}
 }
 
@@ -1761,7 +2018,7 @@ func main() {
 	logStartupMessage(cfg)
 
 	registry := createPrometheusRegistry()
-	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.debugMode, cfg.listenMode)
+	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.listenMode)
 	ctx := context.Background()
 
 	if err := monitor.Connect(ctx); err != nil {
@@ -1774,8 +2031,7 @@ func main() {
 	}()
 
 	if cfg.listenMode {
-		log.Println("Starting live event monitoring...")
-		monitor.StartTemperaturePolling(ctx, cfg.pollInterval)
+		monitor.StartEventListener(ctx, cfg.pollInterval)
 		return
 	}
 

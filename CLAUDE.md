@@ -731,15 +731,23 @@ Potential improvements for auto-discovery:
 
 ### Overview
 
-Listen mode (`--listen` flag) provides real-time event monitoring for pool equipment changes. It's designed for debugging, equipment discovery, and understanding IntelliCenter behavior.
+Listen mode (`--listen` flag) provides real-time event monitoring for pool equipment changes using a hybrid push + poll architecture. It's designed for debugging, equipment discovery, and understanding IntelliCenter behavior.
 
 ### Design Principles
 
-**State-Based Change Detection:**
+**Hybrid Push + Poll Architecture:**
+- Receives real-time push notifications from IntelliCenter for instant updates
+- Periodic polling (default 60s, configurable via `--interval`) catches equipment that doesn't push
 - Maintains previous state snapshots for all equipment types
 - Compares current values against previous snapshots to detect changes
-- Only logs when values actually change (not on every poll)
-- Detects initial state on first poll and logs all equipment discovery
+- Only logs when values actually change (after initial discovery)
+- Uses `PUSH:` and `POLL:` prefixes to distinguish event sources
+
+**Why Hybrid?**
+- IntelliCenter pushes body/setpoint changes instantly
+- **Pump RPM changes are NOT pushed** - only discoverable via polling
+- Polling provides a safety net for any missed push notifications
+- Best of both worlds: real-time + comprehensive
 
 **Universal Equipment Discovery:**
 - Automatically discovers and logs ANY equipment type returned by IntelliCenter
@@ -748,96 +756,102 @@ Listen mode (`--listen` flag) provides real-time event monitoring for pool equip
 - No hardcoded equipment assumptions - works with any configuration
 
 **Clean Event Logging:**
-- Suppresses verbose operational messages in listen mode
 - Shows only meaningful events: initial state, changes, and errors
-- Event messages use consistent "EVENT:" prefix for easy filtering
+- Event messages use `PUSH:` or `POLL:` prefix to indicate source
+- Reports `POLL: [no changes]` when a poll cycle finds no changes
 - Temperature changes show both old and new values for context
 
 ### Key Features
 
-1. **Rapid Polling**: Defaults to 2-second intervals for quick change detection (vs 60-second default for normal mode)
-2. **Multi-Equipment Tracking**: Monitors circuits, pumps, temperatures, thermal equipment, and features simultaneously
-3. **Unknown Equipment Handling**: Logs equipment types not specifically implemented, using OBJTYP and basic status fields
-4. **Initial State Discovery**: Shows all equipment and current state on startup for complete context
-5. **Operational State Visibility**: For thermal equipment, shows heating/cooling/off states, not just on/off
+1. **Hybrid Push + Poll**: Real-time push notifications + periodic polling for comprehensive coverage
+2. **Source Identification**: `PUSH:` and `POLL:` prefixes distinguish event sources
+3. **Multi-Equipment Tracking**: Monitors circuits, pumps, temperatures, thermal equipment, and features simultaneously
+4. **Unknown Equipment Handling**: Logs equipment types not specifically implemented, using OBJTYP and basic status fields
+5. **Initial State Discovery**: Shows all equipment on startup with `POLL:` prefix
+6. **Operational State Visibility**: For thermal equipment, shows heating/cooling/off states, not just on/off
 
 ### Implementation Architecture
 
+**Hybrid Architecture:**
+```go
+func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time.Duration) {
+    // 1. Fetch initial state (logged as POLL:)
+    pm.GetTemperatures(ctx)
+
+    // 2. Create separate poller with its own connection
+    poller := &PoolMonitor{...}  // Shares state, separate websocket
+
+    // 3. Start parallel goroutines
+    go pm.pollLoop(ctx, poller, pollInterval)  // Polls every interval
+    pm.listenLoop(ctx)  // Blocks on push notifications
+}
+```
+
 **State Management:**
 ```go
-// Previous state tracking (main.go)
-var (
-    prevCircuits = make(map[string]CircuitState)
-    prevPumps = make(map[string]float64)
-    prevTemps = make(map[string]float64)
-    prevThermal = make(map[string]ThermalState)
-    prevFeatures = make(map[string]string)
-)
-```
-
-**Change Detection Pattern:**
-```go
-// Compare current state to previous state
-if prevState, exists := prevMap[equipmentID]; !exists {
-    // First time seeing this equipment - log initial state
-    log.Printf("EVENT: Equipment detected: %s", details)
-    prevMap[equipmentID] = currentState
-} else if currentState != prevState {
-    // State changed - log the change
-    log.Printf("EVENT: Equipment changed: %s → %s", prevState, currentState)
-    prevMap[equipmentID] = currentState
+type EquipmentState struct {
+    Circuits        map[string]CircuitState
+    Pumps           map[string]float64
+    Temps           map[string]float64
+    Thermal         map[string]ThermalState
+    Features        map[string]string
+    PollChangeCount int  // Track changes per poll cycle
 }
 ```
 
-**Unknown Equipment Discovery:**
+**Mutex Protection:**
+Both listener and poller access shared state - mutex ensures thread safety:
 ```go
-// For equipment types without specific implementation
-for _, obj := range response.Body.ObjectList {
-    objType := obj.Params["OBJTYP"].(string)
-    if !isKnownType(objType) {
-        // Log unknown equipment with available metadata
-        log.Printf("EVENT: Unknown equipment detected - %s (%s) type=%s status=%s",
-            name, objID, objType, status)
-    }
-}
+pm.mu.Lock()
+pm.previousState.PollChangeCount = 0
+err := poller.GetTemperatures(ctx)
+changes := pm.previousState.PollChangeCount
+pm.mu.Unlock()
 ```
 
 ### Configuration Behavior
 
-**Automatic Interval Adjustment:**
-- When `--listen` is specified without `--interval`, polling defaults to 2 seconds
-- When `--interval` is specified with `--listen`, uses the specified interval
-- Without `--listen`, polling defaults to 60 seconds regardless of interval flag
+**Default Intervals:**
+- Listen mode with `--interval`: Uses specified interval for polling (minimum 5s)
+- Listen mode without `--interval`: Defaults to 60-second polling interval
+- Normal mode: Defaults to 60-second polling interval
+- Intervals below 5 seconds are automatically raised to 5s with a warning
 
 **Listen Mode Detection:**
 ```go
 // Check for listen mode from flag or environment variable
 listenMode := *listenFlag || os.Getenv("PENTAMETER_LISTEN") == "true"
 
-// Adjust default polling interval for listen mode
-if listenMode && *intervalFlag == defaultPollInterval {
-    *intervalFlag = 2  // Rapid polling for change detection
+// In listen mode, use StartEventListener with hybrid push+poll
+if listenMode {
+    pm.StartEventListener(ctx, pollInterval)  // Push + periodic poll
 }
 ```
 
 ### Output Examples
 
-**Initial Discovery:**
+**Initial Discovery (via polling):**
 ```
-2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.1.100:6680
-2025/10/11 14:46:29 Listen mode enabled - logging equipment changes only
-2025/10/11 14:46:29 Starting live event monitoring...
-2025/10/11 14:46:29 EVENT: Spa temperature detected: 72.0°F
-2025/10/11 14:46:29 EVENT: Pool detected: ON
-2025/10/11 14:46:29 EVENT: Spa Light detected: OFF
-2025/10/11 14:46:29 EVENT: Pool Heat Pump detected: off
+2025/11/28 18:51:15 Fetching initial equipment state...
+2025/11/28 18:51:15 POLL: Pool temperature detected: 22.0°F
+2025/11/28 18:51:15 POLL: Spa temperature detected: 95.0°F
+2025/11/28 18:51:15 POLL: Air temperature detected: 36.0°F
+2025/11/28 18:51:15 POLL: VS detected: 3000 RPM
+2025/11/28 18:51:16 POLL: Pool detected: ON
+2025/11/28 18:51:16 POLL: Spa Heater detected: heating
+2025/11/28 18:51:35 Listening for real-time changes (Ctrl+C to stop)...
 ```
 
-**Change Detection:**
+**Push Notification (real-time):**
 ```
-2025/10/11 14:47:04 EVENT: Air temperature changed: 75.0°F → 76.0°F
-2025/10/11 14:47:15 EVENT: Spa Light turned ON
-2025/10/11 14:47:32 EVENT: Unknown equipment detected - Valve Motor (V0001) type=VALVE status=CLOSED
+2025/11/28 18:52:04 PUSH: Spa temp=97°F setpoint=98°F htmode=1 status=ON
+```
+
+**Poll Cycle (periodic):**
+```
+2025/11/28 18:53:35 POLL: Spa temperature changed: 95.0°F → 96.0°F
+2025/11/28 18:53:35 POLL: VS changed: 3000 → 2500 RPM
+2025/11/28 18:54:35 POLL: [no changes]
 ```
 
 ### Use Cases
@@ -847,6 +861,7 @@ if listenMode && *intervalFlag == defaultPollInterval {
 3. **Discovering Equipment Configuration**: Find all equipment in the system, including types not yet implemented
 4. **Testing New Features**: Verify equipment changes are detected correctly
 5. **Development**: Understand equipment behavior before implementing specific support
+6. **Pump Monitoring**: Track pump RPM changes that aren't pushed by IntelliCenter
 
 ### Integration with Metrics Mode
 
@@ -860,52 +875,122 @@ Listen mode and normal metrics mode are mutually compatible:
 
 **Quick Test:**
 ```bash
-# Run for 30 seconds and capture output
-pentameter --ic-ip 192.168.1.100 --listen --interval 1 2>&1 | tee /tmp/listen_test.log
+# Run with default 60s poll interval
+pentameter --ic-ip 192.168.1.100 --listen
+
+# Run with custom 10s poll interval
+pentameter --ic-ip 192.168.1.100 --listen --interval 10
+
 # Trigger equipment changes (turn lights on/off, adjust temperature setpoints)
-# Review captured output for expected EVENT messages
+# PUSH: messages appear instantly, POLL: messages appear on poll cycles
 ```
 
 **Docker Testing:**
 ```bash
 # Override docker-compose.yml to enable listen mode
-docker run --rm -e PENTAMETER_IC_IP=192.168.1.100 -e PENTAMETER_LISTEN=true astrostl/pentameter:latest
+docker run --rm --network host \
+  -e PENTAMETER_IC_IP=192.168.1.100 \
+  -e PENTAMETER_LISTEN=true \
+  -e PENTAMETER_INTERVAL=30 \
+  astrostl/pentameter:latest
 ```
 
-### API Limitations: Why Polling is Required
+### Push Notifications and Message Handling
 
-**CRITICAL:** The IntelliCenter API does **NOT** support push notifications or event streams.
+**UPDATED 2025-11-28:** The IntelliCenter API sends unsolicited push notifications when equipment state changes.
 
-**Verified on 2025-11-08:**
-- Connected to IntelliCenter WebSocket for 2 minutes without sending requests
-- Cycled equipment (lights, pumps, temperature changes) during test
-- Result: **Zero unsolicited messages received**
-- Conclusion: API is strictly request/response - no push support
+**Push Notification Structure:**
+Push notifications use `WriteParamList` command with a nested `changes` array:
+```json
+{
+  "command": "WriteParamList",
+  "messageID": "6ab076b1-ea52-4864-93a3-6d3466700844",
+  "response": "200",
+  "objectList": [{
+    "objnam": "B0001",
+    "changes": [{
+      "objnam": "B0001",
+      "params": {
+        "SNAME": "Pool",
+        "TEMP": "82",
+        "STATUS": "ON"
+      }
+    }]
+  }]
+}
+```
+
+**Key Difference from Polling Responses:**
+- **Polling responses**: `objectList[].params` (direct)
+- **Push notifications**: `objectList[].changes[].params` (nested in `changes` array)
+- Same `params` data in both - SNAME, STATUS, TEMP, HTMODE, etc.
+
+**What Gets Pushed vs What Requires Polling:**
+| Equipment Type | Push Notifications | Requires Polling |
+|---------------|-------------------|------------------|
+| Body temperature/setpoint | ✓ Yes | - |
+| Circuit on/off | ✓ Yes | - |
+| Heater mode changes | ✓ Yes | - |
+| **Pump RPM changes** | ✗ No | ✓ Yes |
+| Feature status | ✓ Yes | - |
+
+**Two Parallel Processing Paths:**
+
+1. **Listen Loop (Push Notifications):**
+   - Blocks on `ReadJSON()` waiting for push notifications
+   - `processRawPushNotification()` unwraps the `changes` array
+   - Logs with `PUSH:` prefix
+   - Runs continuously in foreground
+
+2. **Poll Loop (Periodic Polling):**
+   - Uses separate WebSocket connection
+   - Polls every `--interval` seconds (default 60)
+   - `readResponseWithPushHandling()` skips push notifications
+   - Logs with `POLL:` prefix
+   - Reports `POLL: [no changes]` if no changes detected
+   - Runs as background goroutine
+
+**Implementation Details:**
+```go
+// Listen loop processes push notifications
+func (pm *PoolMonitor) listenLoop(ctx context.Context) {
+    for {
+        var rawMsg map[string]interface{}
+        pm.conn.ReadJSON(&rawMsg)  // Blocks until push arrives
+        pm.mu.Lock()
+        pm.processRawPushNotification(rawMsg)  // Logs PUSH: messages
+        pm.mu.Unlock()
+    }
+}
+
+// Poll loop runs independently
+func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interval time.Duration) {
+    ticker := time.NewTicker(interval)
+    for {
+        <-ticker.C
+        pm.mu.Lock()
+        pm.previousState.PollChangeCount = 0
+        poller.GetTemperatures(ctx)  // Logs POLL: messages for changes
+        if pm.previousState.PollChangeCount == 0 {
+            log.Println("POLL: [no changes]")
+        }
+        pm.mu.Unlock()
+    }
+}
+```
 
 **Implications:**
-- **Polling cannot be eliminated** - all data must be explicitly requested
-- **Event-driven listen mode is impossible** - IntelliCenter never broadcasts changes
-- **Current architecture is optimal** - persistent connection + periodic polling is the best approach
-- **2-second interval is reasonable** - balances responsiveness with network overhead
-
-**Test Utility:**
-```bash
-# Verify push notification behavior yourself
-go build -o test_push test_push.go
-./test_push --ic-ip 192.168.1.100 --duration 120s
-# Cycle equipment while test runs - no messages will be received
-```
-
-The test utility (`test_push.go`) connects and listens without sending requests. Any unsolicited messages would be logged, proving push support exists. None have ever been observed.
-
-**Why This Matters:**
-Developers may wonder "why poll when WebSockets support push?" The answer is that while WebSockets *can* support bidirectional communication, the IntelliCenter API simply doesn't implement server-to-client push. The connection stays open, but remains silent unless we explicitly request data.
+- **Connection remains stable** - push notifications don't break the connection
+- **Listen mode is hybrid** - real-time push + periodic poll for complete coverage
+- **Pump changes captured** - polling catches equipment that doesn't push
+- **Same processing logic** - both modes use identical equipment handlers
+- **Thread-safe** - mutex protects shared state between goroutines
 
 ### Future Enhancements
 
 Potential improvements for listen mode:
 - JSON output format for structured logging
-- WebSocket endpoint for real-time event streaming to web clients (note: this would still require polling the IntelliCenter)
+- WebSocket endpoint for real-time event streaming to web clients
 - Event filtering by equipment type or name
 - Configurable event history (show last N changes on startup)
 - Integration with external notification systems (webhooks, MQTT, etc.)

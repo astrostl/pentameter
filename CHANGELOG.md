@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2025-11-28
+
+### Changed
+- **Listen mode now uses hybrid push + poll architecture** - Real-time push notifications for instant updates, plus periodic polling (default 60s) to catch equipment that doesn't push (like pumps)
+- Listen mode output now distinguishes event sources with `PUSH:` and `POLL:` prefixes
+- Reports `POLL: [no changes]` when a poll cycle finds no equipment changes
+- Initial state fetch shows all equipment with `POLL:` prefix on startup
+- Subsequent polls only report changes, not full equipment state
+- State resets on reconnection to ensure complete equipment discovery
+
+### Fixed
+- **Push notification handling no longer causes equipment disconnect/reconnect** - Messages with non-matching messageIDs (push notifications) are now properly handled instead of triggering reconnection
+- Pump RPM changes now detected via polling since IntelliCenter doesn't push pump updates
+- Added 5-second minimum poll interval to prevent overloading IntelliCenter
+
+### Removed
+- Removed `--debug` flag and `PENTAMETER_DEBUG` environment variable (was not useful)
+
+### Documentation
+- Updated API.md with push notification structure and hybrid approach recommendation
+- Updated CLAUDE.md with hybrid listen mode architecture details
+- Updated README.md listen mode section with PUSH/POLL output examples
+
 ## [0.3.5] - 2025-11-28
 
 ### Added

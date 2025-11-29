@@ -242,9 +242,8 @@ All configuration options can be set via command line flags or environment varia
 | `--ic-ip` | `PENTAMETER_IC_IP` | (auto-discover) | IntelliCenter IP address (optional, auto-discovers via mDNS if not provided) |
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
-| `--interval` | `PENTAMETER_INTERVAL` | `60` | Polling interval (seconds), `2` in listen mode |
+| `--interval` | `PENTAMETER_INTERVAL` | `60` | Polling interval in seconds (minimum 5s) |
 | `--listen` | `PENTAMETER_LISTEN` | `false` | Enable live event monitoring mode |
-| `--debug` | `PENTAMETER_DEBUG` | `false` | Enable enhanced debugging |
 | `--discover` | N/A | N/A | Discover IntelliCenter IP address and exit |
 | `--version` | N/A | N/A | Show version information |
 
@@ -297,24 +296,24 @@ docker run -d --name pentameter --network host astrostl/pentameter:latest
 
 ## Listen Mode - Live Equipment Monitoring
 
-Listen mode provides real-time event logging for pool equipment changes, perfect for debugging, discovering equipment, and monitoring activity.
+Listen mode provides real-time event logging for pool equipment changes using a hybrid push + poll architecture. Perfect for debugging, discovering equipment, and monitoring activity.
 
 ### Features
 
-- **Live Change Detection**: Logs equipment state changes as they happen
+- **Hybrid Push + Poll**: Real-time push notifications for instant updates, plus periodic polling (default 60s) to catch equipment that doesn't push (like pump RPM changes)
+- **Source Identification**: Events prefixed with `PUSH:` or `POLL:` to distinguish real-time vs polled updates
 - **Initial State Discovery**: Shows all equipment and current state on startup
 - **Unknown Equipment Detection**: Automatically discovers equipment types not specifically implemented (valves, sensors, remotes, etc.)
-- **Rapid Polling**: Defaults to 2-second intervals for quick change detection
-- **Clean Output**: Event-only logging without verbose operational messages
+- **Clean Output**: Reports `POLL: [no changes]` when poll cycles find no updates
 
 ### Usage
 
 ```bash
-# Basic listen mode (2-second polling)
+# Basic listen mode (60-second poll interval)
 pentameter --ic-ip 192.168.1.100 --listen
 
-# Custom polling interval
-pentameter --ic-ip 192.168.1.100 --listen --interval 1
+# Custom polling interval (10 seconds)
+pentameter --ic-ip 192.168.1.100 --listen --interval 10
 
 # Via environment variable
 export PENTAMETER_IC_IP=192.168.1.100
@@ -325,28 +324,26 @@ pentameter
 ### Example Output
 
 ```
-2025/10/11 14:46:29 Starting pool monitor for IntelliCenter at 192.168.1.100:6680
-2025/10/11 14:46:29 Listen mode enabled - logging equipment changes only
-2025/10/11 14:46:29 Polling interval: 2s (rapid polling for change detection)
-2025/10/11 14:46:29 Connected to IntelliCenter at ws://192.168.1.100:6680 (attempt 1/6)
-2025/10/11 14:46:29 Starting live event monitoring...
-2025/10/11 14:46:29 EVENT: Spa temperature detected: 72.0°F
-2025/10/11 14:46:29 EVENT: Air temperature detected: 75.0°F
-2025/10/11 14:46:30 EVENT: Pool detected: ON
-2025/10/11 14:46:30 EVENT: Spa Light detected: OFF
-2025/10/11 14:46:30 EVENT: Pool Heat Pump detected: off
-2025/10/11 14:47:04 EVENT: Air temperature changed: 75.0°F → 76.0°F
-2025/10/11 14:47:15 EVENT: Spa Light turned ON
-2025/10/11 14:47:32 EVENT: Unknown equipment detected - Valve Motor (V0001) type=VALVE status=CLOSED
+2025/11/28 18:51:15 Fetching initial equipment state...
+2025/11/28 18:51:15 POLL: Pool temperature detected: 22.0°F
+2025/11/28 18:51:15 POLL: Spa temperature detected: 95.0°F
+2025/11/28 18:51:15 POLL: VS detected: 3000 RPM
+2025/11/28 18:51:16 POLL: Pool detected: ON
+2025/11/28 18:51:16 POLL: Spa Heater detected: heating
+2025/11/28 18:51:35 Listening for real-time changes (Ctrl+C to stop)...
+2025/11/28 18:52:04 PUSH: Spa temp=97°F setpoint=98°F htmode=1 status=ON
+2025/11/28 18:53:35 POLL: Spa temperature changed: 95.0°F → 96.0°F
+2025/11/28 18:53:35 POLL: VS changed: 3000 → 2500 RPM
+2025/11/28 18:54:35 POLL: [no changes]
 ```
 
 ### Use Cases
 
-- **Debugging**: Watch equipment respond to commands in real-time
+- **Debugging**: Watch equipment respond to commands in real-time via `PUSH:` events
 - **Discovery**: Find all equipment in your IntelliCenter, including unknown types
 - **Monitoring**: Track circuit activation, temperature changes, and pump speed adjustments
 - **Testing**: Verify equipment changes are being reported correctly
-- **Development**: Understand equipment behavior before implementing specific support
+- **Pump Tracking**: Monitor pump RPM changes (not pushed by IntelliCenter, requires polling)
 
 ### Equipment Tracked
 
@@ -355,7 +352,7 @@ Listen mode monitors all equipment types:
 - **Circuits**: Lights, pumps, valves, cleaners
 - **Features**: Spa jets, fountains, automation features
 - **Thermal Equipment**: Heaters and heat pumps with operational states
-- **Pumps**: Variable speed RPM changes
+- **Pumps**: Variable speed RPM changes (via polling)
 - **Unknown Equipment**: Any equipment type not specifically implemented
 
 ## Usage
