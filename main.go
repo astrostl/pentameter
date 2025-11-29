@@ -69,6 +69,15 @@ const (
 	// Boolean string constants.
 	trueString = "true"
 
+	// Object type constants.
+	objTypeBody    = "BODY"
+	objTypeCircuit = "CIRCUIT"
+	objTypePump    = "PUMP"
+	objTypeHeater  = "HEATER"
+
+	// Reconnect retry delay.
+	reconnectRetryDelay = 5 * time.Second
+
 	// Thermal status constants.
 	thermalStatusOff      = 0
 	thermalStatusHeating  = 1
@@ -189,7 +198,6 @@ var (
 )
 
 type PoolMonitor struct {
-	mu                     sync.Mutex                // Protects concurrent access in listen mode
 	lastHealthCheck        time.Time
 	lastRefresh            time.Time
 	conn                   *websocket.Conn
@@ -203,12 +211,13 @@ type PoolMonitor struct {
 	intelliCenterIP        string // Store IP separately for re-discovery
 	intelliCenterPort      string // Store port for URL reconstruction
 	retryConfig            RetryConfig
+	consecutiveFailures    int        // Track consecutive connection failures for re-discovery
+	failureThreshold       int        // Number of failures before attempting re-discovery
+	mu                     sync.Mutex // Protects concurrent access in listen mode
 	connected              bool
 	listenMode             bool // Enable live event logging mode
 	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool // Track if freeze protection is currently active
-	consecutiveFailures    int  // Track consecutive connection failures for re-discovery
-	failureThreshold       int  // Number of failures before attempting re-discovery
 	inRediscoveryMode      bool // Currently attempting re-discovery
 	disableAutoRediscovery bool // Disable automatic re-discovery (for testing)
 }
@@ -224,7 +233,7 @@ type EquipmentState struct {
 	ParseErrors     map[string]bool    // Track parse errors we've already logged
 	SkippedFeatures map[string]bool    // Track skipped features we've already logged
 	AirTemp         float64
-	PollChangeCount int                // Count changes detected during current poll
+	PollChangeCount int // Count changes detected during current poll
 }
 
 type BodyHeaterInfo struct {
@@ -374,8 +383,8 @@ func (pm *PoolMonitor) readResponseWithPushHandling(expectedMessageID string) (*
 
 // logPushNotification logs details about an unsolicited push notification from IntelliCenter.
 // This is called during polling when we receive a push while waiting for our response.
-// Since the listen loop handles pushes properly, we just log a brief note here.
-func (pm *PoolMonitor) logPushNotification(resp *IntelliCenterResponse) {
+// Since the listen loop handles pushes properly, we just skip it here.
+func (pm *PoolMonitor) logPushNotification(_ *IntelliCenterResponse) {
 	// Don't log - the listen loop will handle this push notification properly
 	// We just skip it here to avoid duplicate/incomplete logging
 }
@@ -419,7 +428,7 @@ func (pm *PoolMonitor) readGenericResponseWithPushHandling(expectedMessageID str
 // logGenericPushNotification logs details about an unsolicited push notification (generic format).
 // This is called during polling when we receive a push while waiting for our response.
 // Since the listen loop handles pushes properly, we just skip it here.
-func (pm *PoolMonitor) logGenericPushNotification(resp map[string]interface{}) {
+func (pm *PoolMonitor) logGenericPushNotification(_ map[string]interface{}) {
 	// Don't log - the listen loop will handle this push notification properly
 }
 
@@ -445,7 +454,7 @@ func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time
 		intelliCenterURL:    pm.intelliCenterURL,
 		retryConfig:         pm.retryConfig,
 		listenMode:          pm.listenMode,
-		initialPollDone:     true, // Initial poll already done by main monitor
+		initialPollDone:     true,             // Initial poll already done by main monitor
 		previousState:       pm.previousState, // Share state for change detection
 		bodyHeatingStatus:   pm.bodyHeatingStatus,
 		referencedHeaters:   pm.referencedHeaters,
@@ -477,7 +486,7 @@ func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interv
 		select {
 		case <-ctx.Done():
 			if poller.conn != nil {
-				poller.conn.Close()
+				_ = poller.conn.Close()
 			}
 			return
 		case <-ticker.C:
@@ -512,7 +521,7 @@ func (pm *PoolMonitor) listenLoop(ctx context.Context) {
 				log.Printf("Connection error: %v", err)
 				if err := pm.EnsureConnected(ctx); err != nil {
 					log.Printf("Reconnection failed: %v", err)
-					time.Sleep(5 * time.Second)
+					time.Sleep(reconnectRetryDelay)
 				} else {
 					// Reconnected - reset state to get full report on next poll
 					pm.mu.Lock()
@@ -541,57 +550,69 @@ func (pm *PoolMonitor) listenLoop(ctx context.Context) {
 func (pm *PoolMonitor) processRawPushNotification(msg map[string]interface{}) {
 	objectList, ok := msg["objectList"].([]interface{})
 	if !ok || len(objectList) == 0 {
-		// No objectList - log raw message
-		jsonBytes, _ := json.Marshal(msg)
-		log.Printf("RAW: %s", string(jsonBytes))
+		pm.logRawMessage(msg)
 		return
 	}
 
 	for _, item := range objectList {
-		itemMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
+		pm.processObjectListItem(item)
+	}
+}
+
+func (pm *PoolMonitor) logRawMessage(msg map[string]interface{}) {
+	jsonBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("RAW: [marshal error: %v]", err)
+		return
+	}
+	log.Printf("RAW: %s", string(jsonBytes))
+}
+
+func (pm *PoolMonitor) processObjectListItem(item interface{}) {
+	itemMap, ok := item.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	changes, ok := itemMap["changes"].([]interface{})
+	if !ok {
+		pm.logRawMessage(itemMap)
+		return
+	}
+
+	for _, change := range changes {
+		pm.processChangeItem(change)
+	}
+}
+
+func (pm *PoolMonitor) processChangeItem(change interface{}) {
+	changeMap, ok := change.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	objnam, _ := changeMap["objnam"].(string)
+	paramsRaw, ok := changeMap["params"].(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	obj := pm.convertToObjectData(objnam, paramsRaw)
+	pm.processPushObject(obj)
+}
+
+func (pm *PoolMonitor) convertToObjectData(objnam string, paramsRaw map[string]interface{}) ObjectData {
+	params := make(map[string]string)
+	for k, v := range paramsRaw {
+		if s, ok := v.(string); ok {
+			params[k] = s
+		} else {
+			params[k] = fmt.Sprintf("%v", v)
 		}
-
-		// Push notifications have a "changes" array inside each objectList item
-		changes, ok := itemMap["changes"].([]interface{})
-		if !ok {
-			// No changes array - log the raw item
-			jsonBytes, _ := json.Marshal(itemMap)
-			log.Printf("RAW: %s", string(jsonBytes))
-			continue
-		}
-
-		for _, change := range changes {
-			changeMap, ok := change.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			objnam, _ := changeMap["objnam"].(string)
-			paramsRaw, ok := changeMap["params"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			// Convert to ObjectData struct (same as polling uses)
-			params := make(map[string]string)
-			for k, v := range paramsRaw {
-				if s, ok := v.(string); ok {
-					params[k] = s
-				} else {
-					params[k] = fmt.Sprintf("%v", v)
-				}
-			}
-
-			obj := ObjectData{
-				ObjName: objnam,
-				Params:  params,
-			}
-
-			// Use the same processing functions as polling
-			pm.processPushObject(obj)
-		}
+	}
+	return ObjectData{
+		ObjName: objnam,
+		Params:  params,
 	}
 }
 
@@ -606,37 +627,55 @@ func (pm *PoolMonitor) processPushObject(obj ObjectData) {
 
 	// Use the same processing functions as polling mode, then log the change.
 	switch objType {
-	case "BODY":
-		referencedHeaters := make(map[string]BodyHeaterInfo)
-		pm.processBodyObject(obj, referencedHeaters)
-		for k, v := range referencedHeaters {
-			pm.referencedHeaters[k] = v
-		}
-		// Log human-readable body state
-		log.Printf("PUSH: %s temp=%s°F setpoint=%s°F htmode=%s status=%s",
-			name, obj.Params["TEMP"], obj.Params["SETPT"], obj.Params["HTMODE"], obj.Params["STATUS"])
-
-	case "PUMP":
-		if err := pm.processPumpObject(obj, 0); err != nil {
-			log.Printf("PUSH: %s pump error: %v", name, err)
-		} else {
-			log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
-				name, obj.Params["RPM"], obj.Params["PWR"], obj.Params["STATUS"])
-		}
-
-	case "CIRCUIT":
-		pm.processCircuitObject(obj)
-		log.Printf("PUSH: %s status=%s", name, obj.Params["STATUS"])
-
-	case "HEATER":
-		pm.processHeaterObject(obj)
-		log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params["STATUS"], obj.Params["MODE"])
-
+	case objTypeBody:
+		pm.handleBodyPush(obj, name)
+	case objTypePump:
+		pm.handlePumpPush(obj, name)
+	case objTypeCircuit:
+		pm.handleCircuitPush(obj, name)
+	case objTypeHeater:
+		pm.handleHeaterPush(obj, name)
 	default:
-		// Unknown type - log raw JSON
-		jsonBytes, _ := json.Marshal(obj.Params)
-		log.Printf("PUSH: unknown %s: %s", obj.ObjName, string(jsonBytes))
+		pm.handleUnknownPush(obj)
 	}
+}
+
+func (pm *PoolMonitor) handleBodyPush(obj ObjectData, name string) {
+	referencedHeaters := make(map[string]BodyHeaterInfo)
+	pm.processBodyObject(obj, referencedHeaters)
+	for k, v := range referencedHeaters {
+		pm.referencedHeaters[k] = v
+	}
+	log.Printf("PUSH: %s temp=%s°F setpoint=%s°F htmode=%s status=%s",
+		name, obj.Params["TEMP"], obj.Params["SETPT"], obj.Params["HTMODE"], obj.Params["STATUS"])
+}
+
+func (pm *PoolMonitor) handlePumpPush(obj ObjectData, name string) {
+	if err := pm.processPumpObject(obj, 0); err != nil {
+		log.Printf("PUSH: %s pump error: %v", name, err)
+	} else {
+		log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
+			name, obj.Params["RPM"], obj.Params["PWR"], obj.Params["STATUS"])
+	}
+}
+
+func (pm *PoolMonitor) handleCircuitPush(obj ObjectData, name string) {
+	pm.processCircuitObject(obj)
+	log.Printf("PUSH: %s status=%s", name, obj.Params["STATUS"])
+}
+
+func (pm *PoolMonitor) handleHeaterPush(obj ObjectData, name string) {
+	pm.processHeaterObject(obj)
+	log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params["STATUS"], obj.Params["MODE"])
+}
+
+func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
+	jsonBytes, err := json.Marshal(obj.Params)
+	if err != nil {
+		log.Printf("PUSH: unknown %s: [marshal error: %v]", obj.ObjName, err)
+		return
+	}
+	log.Printf("PUSH: unknown %s: %s", obj.ObjName, string(jsonBytes))
 }
 
 func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
@@ -1658,8 +1697,8 @@ func (pm *PoolMonitor) initializeState() {
 	}
 }
 
-// logPollChange logs a change and increments the change counter.
-func (pm *PoolMonitor) logPollChange(format string, args ...interface{}) {
+// logPollChangef logs a change and increments the change counter.
+func (pm *PoolMonitor) logPollChangef(format string, args ...interface{}) {
 	log.Printf("POLL: "+format, args...)
 	pm.previousState.PollChangeCount++
 }
@@ -1679,7 +1718,7 @@ func (pm *PoolMonitor) trackWaterTemp(name string, temp float64) {
 			log.Printf("POLL: %s temperature detected: %.1f°F", name, temp)
 		}
 	} else if prevTemp != temp {
-		pm.logPollChange("%s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
+		pm.logPollChangef("%s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
 	}
 	pm.previousState.WaterTemps[name] = temp
 }
@@ -1698,7 +1737,7 @@ func (pm *PoolMonitor) trackAirTemp(temp float64) {
 			log.Printf("POLL: Air temperature detected: %.1f°F", temp)
 		}
 	} else if pm.previousState.AirTemp != temp {
-		pm.logPollChange("Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
+		pm.logPollChangef("Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
 	}
 	pm.previousState.AirTemp = temp
 }
@@ -1718,7 +1757,7 @@ func (pm *PoolMonitor) trackPumpRPM(name string, rpm float64) {
 			log.Printf("POLL: %s detected: %.0f RPM", name, rpm)
 		}
 	} else if prevRPM != rpm {
-		pm.logPollChange("%s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
+		pm.logPollChangef("%s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
 	}
 	pm.previousState.PumpRPMs[name] = rpm
 }
@@ -1738,7 +1777,7 @@ func (pm *PoolMonitor) trackCircuit(name, status string) {
 			log.Printf("POLL: %s detected: %s", name, status)
 		}
 	} else if prevStatus != status {
-		pm.logPollChange("%s turned %s", name, status)
+		pm.logPollChangef("%s turned %s", name, status)
 	}
 	pm.previousState.Circuits[name] = status
 }
@@ -1758,7 +1797,7 @@ func (pm *PoolMonitor) trackThermal(name string, status int) {
 			log.Printf("POLL: %s detected: %s", name, pm.getStatusDescription(status))
 		}
 	} else if prevStatus != status {
-		pm.logPollChange("%s status changed: %s → %s", name,
+		pm.logPollChangef("%s status changed: %s → %s", name,
 			pm.getStatusDescription(prevStatus), pm.getStatusDescription(status))
 	}
 	pm.previousState.Thermals[name] = status
@@ -1779,7 +1818,7 @@ func (pm *PoolMonitor) trackFeature(name, status string) {
 			log.Printf("POLL: %s detected: %s", name, status)
 		}
 	} else if prevStatus != status {
-		pm.logPollChange("%s turned %s", name, status)
+		pm.logPollChangef("%s turned %s", name, status)
 	}
 	pm.previousState.Features[name] = status
 }
@@ -1899,77 +1938,101 @@ type appConfig struct {
 	pollInterval      time.Duration
 }
 
-func parseCommandLineFlags() *appConfig {
-	intelliCenterIP := flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
-		"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)")
-	intelliCenterPort := flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"), "IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)")
-	httpPort := flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"), "HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)")
-	listenMode := flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
-		"Enable live event logging mode (rapid polling, log changes only) (env: PENTAMETER_LISTEN)")
-	pollIntervalSeconds := flag.Int("interval", func() int {
-		if env := os.Getenv("PENTAMETER_INTERVAL"); env != "" {
-			if val, err := strconv.Atoi(env); err == nil {
-				return val
-			}
-		}
-		return 0 // 0 means "use mode-specific default"
-	}(), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)")
-	showVersion := flag.Bool("version", false, "Show version information")
-	discoverOnly := flag.Bool("discover", false, "Discover IntelliCenter IP address and exit")
-	flag.Parse()
+type commandLineFlags struct {
+	intelliCenterIP   *string
+	intelliCenterPort *string
+	httpPort          *string
+	listenMode        *bool
+	pollInterval      *int
+	showVersion       *bool
+	discoverOnly      *bool
+}
 
-	if *showVersion {
+func defineFlags() *commandLineFlags {
+	return &commandLineFlags{
+		intelliCenterIP: flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
+			"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)"),
+		intelliCenterPort: flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"),
+			"IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)"),
+		httpPort: flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"),
+			"HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)"),
+		listenMode: flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
+			"Enable live event logging mode (rapid polling, log changes only) (env: PENTAMETER_LISTEN)"),
+		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
+		showVersion:  flag.Bool("version", false, "Show version information"),
+		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
+	}
+}
+
+func getEnvIntOrDefault(envVar string, defaultValue int) int {
+	if env := os.Getenv(envVar); env != "" {
+		if val, err := strconv.Atoi(env); err == nil {
+			return val
+		}
+	}
+	return defaultValue
+}
+
+func handleEarlyExitFlags(flags *commandLineFlags) {
+	if *flags.showVersion {
 		log.Printf("pentameter %s", version)
 		os.Exit(0)
 	}
 
-	if *discoverOnly {
+	if *flags.discoverOnly {
 		log.Println("Discovering IntelliCenter...")
 		log.Println("Searching for IntelliCenter on network (up to 60 seconds). Press Ctrl-C to cancel.")
-		ip, err := DiscoverIntelliCenter(true) // verbose mode for --discover
+		ip, err := DiscoverIntelliCenter(true)
 		if err != nil {
 			log.Fatalf("Discovery failed: %v", err)
 		}
 		log.Printf("IntelliCenter discovered at: %s", ip)
 		os.Exit(0)
 	}
+}
 
-	// Determine poll interval
-	// 0 means use mode-specific default
-	var pollInterval time.Duration
-	if *pollIntervalSeconds > 0 {
-		if *pollIntervalSeconds < minPollInterval {
+func determinePollInterval(pollIntervalSeconds int, listenMode bool) time.Duration {
+	if pollIntervalSeconds > 0 {
+		if pollIntervalSeconds < minPollInterval {
 			log.Printf("Warning: interval %ds is below minimum (%ds), using %ds",
-				*pollIntervalSeconds, minPollInterval, minPollInterval)
-			pollInterval = minPollInterval * time.Second
-		} else {
-			pollInterval = time.Duration(*pollIntervalSeconds) * time.Second
+				pollIntervalSeconds, minPollInterval, minPollInterval)
+			return minPollInterval * time.Second
 		}
-	} else if *listenMode {
-		pollInterval = listenModePollInterval * time.Second
-	} else {
-		pollInterval = defaultPollInterval * time.Second
+		return time.Duration(pollIntervalSeconds) * time.Second
 	}
+	if listenMode {
+		return listenModePollInterval * time.Second
+	}
+	return defaultPollInterval * time.Second
+}
 
-	// If no IP provided, attempt auto-discovery
-	if *intelliCenterIP == "" {
-		log.Println("No IP address provided, attempting auto-discovery...")
-		log.Println("Tip: Specify with --ic-ip flag or export PENTAMETER_IC_IP environment variable to skip discovery")
-		log.Println("Searching for IntelliCenter on network (up to 60 seconds). Press Ctrl-C to cancel.")
-		discoveredIP, err := DiscoverIntelliCenter(true) // verbose mode for all auto-discovery
-		if err != nil {
-			log.Fatalf("Auto-discovery failed: %v\nPlease provide IP address using --ic-ip flag or PENTAMETER_IC_IP environment variable", err)
-		}
-		*intelliCenterIP = discoveredIP
-		log.Printf("Auto-discovered IntelliCenter at: %s", *intelliCenterIP)
+func resolveIntelliCenterIP(ip string) string {
+	if ip != "" {
+		return ip
 	}
+	log.Println("No IP address provided, attempting auto-discovery...")
+	log.Println("Tip: Specify with --ic-ip flag or export PENTAMETER_IC_IP environment variable to skip discovery")
+	log.Println("Searching for IntelliCenter on network (up to 60 seconds). Press Ctrl-C to cancel.")
+	discoveredIP, err := DiscoverIntelliCenter(true)
+	if err != nil {
+		log.Fatalf("Auto-discovery failed: %v\nPlease provide IP address using --ic-ip flag or PENTAMETER_IC_IP environment variable", err)
+	}
+	log.Printf("Auto-discovered IntelliCenter at: %s", discoveredIP)
+	return discoveredIP
+}
+
+func parseCommandLineFlags() *appConfig {
+	flags := defineFlags()
+	flag.Parse()
+
+	handleEarlyExitFlags(flags)
 
 	return &appConfig{
-		intelliCenterIP:   *intelliCenterIP,
-		intelliCenterPort: *intelliCenterPort,
-		httpPort:          *httpPort,
-		listenMode:        *listenMode,
-		pollInterval:      pollInterval,
+		intelliCenterIP:   resolveIntelliCenterIP(*flags.intelliCenterIP),
+		intelliCenterPort: *flags.intelliCenterPort,
+		httpPort:          *flags.httpPort,
+		listenMode:        *flags.listenMode,
+		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
 	}
 }
 

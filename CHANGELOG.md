@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.6] - 2025-11-28
+## [0.4.0] - 2025-11-28
 
 ### Changed
 - **Listen mode now uses hybrid push + poll architecture** - Real-time push notifications for instant updates, plus periodic polling (default 60s) to catch equipment that doesn't push (like pumps)
@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - Removed `--debug` flag and `PENTAMETER_DEBUG` environment variable (was not useful)
+
+### Code Quality
+- Reduced cyclomatic complexity in push notification processing through function extraction
+- Added constants for object types and reconnect delays
+- Refactored command-line flag parsing into smaller, testable functions
+- Improved struct field alignment for better memory layout
+- Fixed unused parameter warnings with underscore convention
+- Added comprehensive test coverage for new helper functions (100+ tests passing)
 
 ### Documentation
 - Updated API.md with push notification structure and hybrid approach recommendation

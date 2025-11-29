@@ -16,9 +16,12 @@ import (
 )
 
 const (
-	testShowOnMenuValue = "1w"     // Test value for SHOMNU parameter indicating feature should be shown.
-	testStatusOff       = "OFF"    // Test circuit/feature off status.
-	testStatusOn        = statusOn // Test circuit/feature on status (uses main.go constant).
+	testShowOnMenuValue   = "1w"                      // Test value for SHOMNU parameter indicating feature should be shown.
+	testStatusOff         = "OFF"                     // Test circuit/feature off status.
+	testStatusOn          = statusOn                  // Test circuit/feature on status (uses main.go constant).
+	testIntelliCenterURL  = "ws://192.168.1.100:6680" // Test IntelliCenter WebSocket URL.
+	testIntelliCenterIP   = "192.168.1.100"           // Test IntelliCenter IP address.
+	testIntelliCenterPort = "6680"                    // Test IntelliCenter port.
 )
 
 // Test helper to create a mock WebSocket server.
@@ -62,10 +65,10 @@ func createMockWebSocketServer(t *testing.T, responses map[string]IntelliCenterR
 }
 
 func TestNewPoolMonitor(t *testing.T) {
-	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false)
+	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
 
-	if poolMonitor.intelliCenterURL != "ws://192.168.1.100:6680" {
-		t.Errorf("Expected URL ws://192.168.1.100:6680, got %s", poolMonitor.intelliCenterURL)
+	if poolMonitor.intelliCenterURL != testIntelliCenterURL {
+		t.Errorf("Expected URL %s, got %s", testIntelliCenterURL, poolMonitor.intelliCenterURL)
 	}
 
 	if poolMonitor.connected {
@@ -2568,14 +2571,14 @@ func TestListenModeIntegration(t *testing.T) {
 // - This is a pragmatic approach: test the logic we control, not external network dependencies
 
 func TestUpdateIntelliCenterIP(t *testing.T) {
-	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false)
+	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
 
 	// Verify initial state
-	if poolMonitor.intelliCenterIP != "192.168.1.100" {
-		t.Errorf("Expected initial IP 192.168.1.100, got %s", poolMonitor.intelliCenterIP)
+	if poolMonitor.intelliCenterIP != testIntelliCenterIP {
+		t.Errorf("Expected initial IP %s, got %s", testIntelliCenterIP, poolMonitor.intelliCenterIP)
 	}
-	if poolMonitor.intelliCenterURL != "ws://192.168.1.100:6680" {
-		t.Errorf("Expected initial URL ws://192.168.1.100:6680, got %s", poolMonitor.intelliCenterURL)
+	if poolMonitor.intelliCenterURL != testIntelliCenterURL {
+		t.Errorf("Expected initial URL %s, got %s", testIntelliCenterURL, poolMonitor.intelliCenterURL)
 	}
 
 	// Update IP
@@ -2749,5 +2752,542 @@ func TestHandlePollingTickWithRediscoverySuccess(t *testing.T) {
 	}
 	if poolMonitor.consecutiveFailures != 0 {
 		t.Errorf("Should reset consecutive failures after success, got %d", poolMonitor.consecutiveFailures)
+	}
+}
+
+// Tests for refactored command-line and configuration functions.
+
+func TestGetEnvIntOrDefault(t *testing.T) {
+	tests := []struct {
+		name         string
+		envVar       string
+		envValue     string
+		defaultValue int
+		expected     int
+	}{
+		{
+			name:         "returns default when env not set",
+			envVar:       "TEST_PENTAMETER_INT_NOTSET",
+			envValue:     "",
+			defaultValue: 42,
+			expected:     42,
+		},
+		{
+			name:         "returns env value when valid integer",
+			envVar:       "TEST_PENTAMETER_INT_VALID",
+			envValue:     "100",
+			defaultValue: 42,
+			expected:     100,
+		},
+		{
+			name:         "returns default when env value is invalid",
+			envVar:       "TEST_PENTAMETER_INT_INVALID",
+			envValue:     "not-a-number",
+			defaultValue: 42,
+			expected:     42,
+		},
+		{
+			name:         "returns env value zero when explicitly set to zero",
+			envVar:       "TEST_PENTAMETER_INT_ZERO",
+			envValue:     "0",
+			defaultValue: 42,
+			expected:     0,
+		},
+		{
+			name:         "returns negative env value when set",
+			envVar:       "TEST_PENTAMETER_INT_NEG",
+			envValue:     "-10",
+			defaultValue: 42,
+			expected:     -10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set up environment
+			if tt.envValue != "" {
+				t.Setenv(tt.envVar, tt.envValue)
+			}
+
+			result := getEnvIntOrDefault(tt.envVar, tt.defaultValue)
+			if result != tt.expected {
+				t.Errorf("getEnvIntOrDefault(%q, %d) = %d, want %d",
+					tt.envVar, tt.defaultValue, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDeterminePollInterval(t *testing.T) {
+	tests := []struct {
+		name                string
+		pollIntervalSeconds int
+		listenMode          bool
+		expected            time.Duration
+	}{
+		{
+			name:                "uses explicit interval when provided",
+			pollIntervalSeconds: 30,
+			listenMode:          false,
+			expected:            30 * time.Second,
+		},
+		{
+			name:                "uses explicit interval in listen mode",
+			pollIntervalSeconds: 30,
+			listenMode:          true,
+			expected:            30 * time.Second,
+		},
+		{
+			name:                "uses listen mode default when no explicit interval",
+			pollIntervalSeconds: 0,
+			listenMode:          true,
+			expected:            10 * time.Second, // listenModePollInterval
+		},
+		{
+			name:                "uses normal default when no explicit interval and not listen mode",
+			pollIntervalSeconds: 0,
+			listenMode:          false,
+			expected:            60 * time.Second, // defaultPollInterval
+		},
+		{
+			name:                "enforces minimum interval",
+			pollIntervalSeconds: 2,
+			listenMode:          false,
+			expected:            5 * time.Second, // minPollInterval
+		},
+		{
+			name:                "allows exact minimum interval",
+			pollIntervalSeconds: 5,
+			listenMode:          false,
+			expected:            5 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := determinePollInterval(tt.pollIntervalSeconds, tt.listenMode)
+			if result != tt.expected {
+				t.Errorf("determinePollInterval(%d, %v) = %v, want %v",
+					tt.pollIntervalSeconds, tt.listenMode, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Tests for push notification helper functions.
+
+func TestProcessRawPushNotification(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	tests := []struct {
+		msg  map[string]interface{}
+		name string
+	}{
+		{
+			name: "handles empty objectList",
+			msg: map[string]interface{}{
+				"command": "WriteParamList",
+			},
+		},
+		{
+			name: "handles nil objectList",
+			msg: map[string]interface{}{
+				"command":    "WriteParamList",
+				"objectList": nil,
+			},
+		},
+		{
+			name: "handles valid objectList with changes",
+			msg: map[string]interface{}{
+				"command": "WriteParamList",
+				"objectList": []interface{}{
+					map[string]interface{}{
+						"objnam": "B0001",
+						"changes": []interface{}{
+							map[string]interface{}{
+								"objnam": "B0001",
+								"params": map[string]interface{}{
+									"SNAME":  "Pool",
+									"TEMP":   "82",
+									"OBJTYP": "BODY",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Should not panic
+			poolMonitor.processRawPushNotification(tt.msg)
+		})
+	}
+}
+
+func TestProcessObjectListItem(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	tests := []struct {
+		item interface{}
+		name string
+	}{
+		{
+			name: "handles non-map item",
+			item: "not a map",
+		},
+		{
+			name: "handles item without changes array",
+			item: map[string]interface{}{
+				"objnam": "B0001",
+				"params": map[string]interface{}{"TEMP": "82"},
+			},
+		},
+		{
+			name: "handles item with empty changes array",
+			item: map[string]interface{}{
+				"objnam":  "B0001",
+				"changes": []interface{}{},
+			},
+		},
+		{
+			name: "handles item with valid changes",
+			item: map[string]interface{}{
+				"objnam": "B0001",
+				"changes": []interface{}{
+					map[string]interface{}{
+						"objnam": "B0001",
+						"params": map[string]interface{}{
+							"SNAME":  "Pool",
+							"TEMP":   "82",
+							"OBJTYP": "BODY",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Should not panic
+			poolMonitor.processObjectListItem(tt.item)
+		})
+	}
+}
+
+func TestProcessChangeItem(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	tests := []struct {
+		change interface{}
+		name   string
+	}{
+		{
+			name:   "handles non-map change",
+			change: "not a map",
+		},
+		{
+			name: "handles change without params",
+			change: map[string]interface{}{
+				"objnam": "B0001",
+			},
+		},
+		{
+			name: "handles change with valid params",
+			change: map[string]interface{}{
+				"objnam": "B0001",
+				"params": map[string]interface{}{
+					"SNAME":  "Pool",
+					"TEMP":   "82",
+					"OBJTYP": "BODY",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Should not panic
+			poolMonitor.processChangeItem(tt.change)
+		})
+	}
+}
+
+func TestConvertToObjectData(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	tests := []struct {
+		name      string
+		objnam    string
+		paramsRaw map[string]interface{}
+		wantName  string
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:   "converts string params",
+			objnam: "B0001",
+			paramsRaw: map[string]interface{}{
+				"SNAME": "Pool",
+				"TEMP":  "82",
+			},
+			wantName:  "B0001",
+			wantKey:   "SNAME",
+			wantValue: "Pool",
+		},
+		{
+			name:   "converts non-string params to string",
+			objnam: "P0001",
+			paramsRaw: map[string]interface{}{
+				"RPM":    2400,
+				"STATUS": true,
+			},
+			wantName:  "P0001",
+			wantKey:   "RPM",
+			wantValue: "2400",
+		},
+		{
+			name:      "handles empty params",
+			objnam:    "X0001",
+			paramsRaw: map[string]interface{}{},
+			wantName:  "X0001",
+			wantKey:   "",
+			wantValue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := poolMonitor.convertToObjectData(tt.objnam, tt.paramsRaw)
+
+			if result.ObjName != tt.wantName {
+				t.Errorf("ObjName = %q, want %q", result.ObjName, tt.wantName)
+			}
+
+			if tt.wantKey != "" {
+				if result.Params[tt.wantKey] != tt.wantValue {
+					t.Errorf("Params[%q] = %q, want %q", tt.wantKey, result.Params[tt.wantKey], tt.wantValue)
+				}
+			}
+		})
+	}
+}
+
+func TestLogRawMessage(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Test with valid message - should not panic
+	poolMonitor.logRawMessage(map[string]interface{}{
+		"command": "test",
+		"data":    "value",
+	})
+
+	// Test with empty message - should not panic
+	poolMonitor.logRawMessage(map[string]interface{}{})
+}
+
+func TestHandleBodyPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	obj := ObjectData{
+		ObjName: "B0001",
+		Params: map[string]string{
+			"SNAME":  "Pool",
+			"TEMP":   "82",
+			"SETPT":  "85",
+			"HTMODE": "1",
+			"STATUS": "ON",
+			"OBJTYP": "BODY",
+		},
+	}
+
+	// Should not panic and should process body
+	poolMonitor.handleBodyPush(obj, "Pool")
+}
+
+func TestHandlePumpPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	// Test with valid pump data
+	obj := ObjectData{
+		ObjName: "P0001",
+		Params: map[string]string{
+			"SNAME":  "Pool Pump",
+			"RPM":    "2400",
+			"PWR":    "500",
+			"STATUS": "ON",
+			"OBJTYP": "PUMP",
+		},
+	}
+	poolMonitor.handlePumpPush(obj, "Pool Pump")
+
+	// Test with invalid RPM (should log error but not panic)
+	objInvalid := ObjectData{
+		ObjName: "P0002",
+		Params: map[string]string{
+			"SNAME":  "Bad Pump",
+			"RPM":    "invalid",
+			"STATUS": "ON",
+			"OBJTYP": "PUMP",
+		},
+	}
+	poolMonitor.handlePumpPush(objInvalid, "Bad Pump")
+}
+
+func TestHandleCircuitPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	obj := ObjectData{
+		ObjName: "C0001",
+		Params: map[string]string{
+			"SNAME":  "Pool Light",
+			"STATUS": "ON",
+			"OBJTYP": "CIRCUIT",
+			"SUBTYP": "LIGHT",
+		},
+	}
+
+	// Should not panic
+	poolMonitor.handleCircuitPush(obj, "Pool Light")
+}
+
+func TestHandleHeaterPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	obj := ObjectData{
+		ObjName: "H0001",
+		Params: map[string]string{
+			"SNAME":  "Pool Heater",
+			"STATUS": "ON",
+			"MODE":   "1",
+			"OBJTYP": "HEATER",
+			"SUBTYP": "THERMAL",
+		},
+	}
+
+	// Should not panic
+	poolMonitor.handleHeaterPush(obj, "Pool Heater")
+}
+
+func TestHandleUnknownPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	// Test with normal params
+	obj := ObjectData{
+		ObjName: "V0001",
+		Params: map[string]string{
+			"SNAME":  "Pool Valve",
+			"STATUS": "OPEN",
+			"OBJTYP": "VALVE",
+		},
+	}
+	poolMonitor.handleUnknownPush(obj)
+
+	// Test with empty params
+	objEmpty := ObjectData{
+		ObjName: "X0001",
+		Params:  map[string]string{},
+	}
+	poolMonitor.handleUnknownPush(objEmpty)
+}
+
+func TestProcessPushObject(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	tests := []struct {
+		name string
+		obj  ObjectData
+	}{
+		{
+			name: "routes BODY type",
+			obj: ObjectData{
+				ObjName: "B0001",
+				Params: map[string]string{
+					"SNAME":  "Pool",
+					"OBJTYP": "BODY",
+					"TEMP":   "82",
+				},
+			},
+		},
+		{
+			name: "routes PUMP type",
+			obj: ObjectData{
+				ObjName: "P0001",
+				Params: map[string]string{
+					"SNAME":  "Pool Pump",
+					"OBJTYP": "PUMP",
+					"RPM":    "2400",
+				},
+			},
+		},
+		{
+			name: "routes CIRCUIT type",
+			obj: ObjectData{
+				ObjName: "C0001",
+				Params: map[string]string{
+					"SNAME":  "Pool Light",
+					"OBJTYP": "CIRCUIT",
+					"STATUS": "ON",
+				},
+			},
+		},
+		{
+			name: "routes HEATER type",
+			obj: ObjectData{
+				ObjName: "H0001",
+				Params: map[string]string{
+					"SNAME":  "Pool Heater",
+					"OBJTYP": "HEATER",
+					"STATUS": "ON",
+				},
+			},
+		},
+		{
+			name: "routes unknown type",
+			obj: ObjectData{
+				ObjName: "X0001",
+				Params: map[string]string{
+					"SNAME":  "Unknown",
+					"OBJTYP": "UNKNOWN",
+					"STATUS": "ON",
+				},
+			},
+		},
+		{
+			name: "uses ObjName when SNAME is empty",
+			obj: ObjectData{
+				ObjName: "B0002",
+				Params: map[string]string{
+					"OBJTYP": "BODY",
+					"TEMP":   "82",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Should not panic
+			poolMonitor.processPushObject(tt.obj)
+		})
+	}
+}
+
+func TestResolveIntelliCenterIPWithProvidedIP(t *testing.T) {
+	// Test that provided IP is returned directly
+	result := resolveIntelliCenterIP("192.168.1.100")
+	if result != "192.168.1.100" {
+		t.Errorf("resolveIntelliCenterIP(\"192.168.1.100\") = %q, want \"192.168.1.100\"", result)
 	}
 }
