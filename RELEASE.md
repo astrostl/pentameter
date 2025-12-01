@@ -4,6 +4,16 @@
 
 If any command returns an error or fails quality checks, STOP the release process immediately. Fix the issue, commit the fix, and restart from step 1.
 
+**⚠️ CRITICAL: NEVER CREATE RELEASES WITHOUT EXPLICIT USER APPROVAL ⚠️**
+
+All release creation (git tags, version bumps, DockerHub publishing) requires explicit user direction. Never create releases proactively or as troubleshooting attempts.
+
+## Version Management
+
+This project uses semantic versioning with git tags. The Makefile automatically determines versions using:
+- `VERSION ?= $(shell git describe --tags --always --dirty)`
+- `LATEST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")`
+
 ## Pre-Release Requirements
 
 Before starting the release process, ensure:
@@ -298,6 +308,18 @@ After completing all steps, verify:
 4. ✅ Installed binary shows clean version: `pentameter v0.X.X`
 5. ✅ Formula in repository has correct checksums matching GitHub release assets
 
+**Verification Commands:**
+```bash
+# Verify multi-platform manifest exists
+docker manifest inspect astrostl/pentameter:v0.X.X
+
+# Test published image works
+docker run --rm astrostl/pentameter:v0.X.X --help
+
+# Verify Go Report Card updates (may take time)
+curl -s https://goreportcard.com/report/github.com/astrostl/pentameter
+```
+
 ## Release Checklist Summary
 
 Use this checklist to track progress:
@@ -327,3 +349,83 @@ Use this checklist to track progress:
 - Always verify binary versions before creating the GitHub release
 - The Homebrew formula checksums MUST match the GitHub release assets exactly
 - Never move the release tag after creating the GitHub release (the assets are already uploaded)
+
+---
+
+## Reference
+
+### Makefile Targets
+
+**Individual targets available for release workflows:**
+
+| Target | Description |
+|--------|-------------|
+| `make docker-tag` | Tag images for publishing |
+| `make docker-push` | Build and push multi-platform images (linux/amd64,linux/arm64) - DEFAULT |
+| `make docker-push-single` | Push single-platform images only (for testing) |
+| `make docker-manifest` | Create multi-platform manifests using manifest-tool |
+| `make docker-release` | Build + push multi-platform images (without quality checks) |
+| `make build-macos-binaries` | Build macOS binaries for Homebrew (Intel + Apple Silicon) |
+| `make package-macos-binaries` | Package macOS binaries into tar.gz archives |
+| `make generate-macos-checksums` | Generate SHA256 checksums for macOS packages |
+| `make update-homebrew-formula` | Update Formula/pentameter.rb with new version and checksums |
+| `make release` | **Full workflow (quality + Docker + Homebrew + GitHub assets)** |
+
+### Multi-Platform Docker Publishing
+
+All DockerHub releases are multi-platform by default. The workflow:
+
+1. Builds separate architecture-specific images (`:latest-amd64`, `:latest-arm64`)
+2. Pushes both images to DockerHub
+3. Uses `manifest-tool` to create multi-platform manifests that automatically select the correct image per platform
+4. Works with both `docker` and `nerdctl` (unlike Docker buildx)
+
+**Why manifest-tool:** Docker buildx requires Docker specifically and doesn't work with nerdctl. The manifest-tool approach builds individual platform images and creates manifests, working with any container runtime.
+
+**Final DockerHub Layout:**
+- `astrostl/pentameter:latest` - Multi-platform manifest (users should use this)
+- `astrostl/pentameter:latest-amd64` - Intel/AMD64 specific image
+- `astrostl/pentameter:latest-arm64` - Apple Silicon/ARM64 specific image
+- Version-specific tags follow the same pattern (`v0.X.X`, `v0.X.X-amd64`, `v0.X.X-arm64`)
+
+### Homebrew Tap Distribution
+
+The project includes a consolidated Homebrew tap in the main repository for easy macOS installation.
+
+**Repository Structure:**
+```
+pentameter/
+├── Formula/
+│   └── pentameter.rb      # Homebrew formula for macOS binaries
+├── dist/                  # Generated during release (macOS binaries + checksums)
+├── docker-compose.yml     # Full monitoring stack
+├── Makefile              # Build automation including Homebrew targets
+└── ...
+```
+
+**Homebrew Formula Management:**
+
+The `Formula/pentameter.rb` file is automatically maintained by the Makefile:
+
+- **During Development:** Formula contains placeholder SHA256 values (`PLACEHOLDER_AMD64_SHA256`, `PLACEHOLDER_ARM64_SHA256`) and points to the current version tag
+- **During Release:** Real checksums are generated from the built binaries and must be manually updated in the formula to match GitHub release assets
+
+**User Installation:**
+
+```bash
+# Add the tap (one time setup)
+brew tap astrostl/pentameter https://github.com/astrostl/pentameter
+
+# Install pentameter
+brew install pentameter
+
+# Or one-line install (automatically adds tap)
+brew install astrostl/pentameter/pentameter
+```
+
+**Platform Support:**
+- **macOS (Intel + Apple Silicon)**: Pre-built binaries via Homebrew
+- **Linux**: Docker deployment (docker-compose.yml) or build from source
+- **Windows**: Docker deployment or build from source
+
+The formula provides helpful error messages for non-macOS platforms directing users to Docker or source builds.
