@@ -246,6 +246,10 @@ source .env
 echo '{"command":"GetHardwareDefinition"}' | websocat ws://$PENTAMETER_IC_IP:6680
 ```
 
+**⚠️ See [API.md](API.md) for complete IntelliCenter WebSocket API documentation ⚠️**
+
+API.md contains the definitive reference for all IntelliCenter commands, object types, push notifications, and protocol details.
+
 ### Temperature Units
 
 **IMPORTANT**: This project uses Fahrenheit for all temperature metrics, not Celsius.
