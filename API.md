@@ -317,7 +317,7 @@ The `GetParamList` command retrieves current operational data for monitoring.
 | Heaters | H#### | Heating equipment | H0001 (UltraTemp), H0002 (Gas Heater) |
 | Pumps | PMP## | Variable speed pumps | PMP01 (VS), PMP02 (pool) |
 | Sensors | Various | Temperature sensors | _A135 (Air), SSS11 (Solar) |
-| Light Show Groups | GRP## | Circuit group parent (SUBTYP=LITSHO) | GRP01 (AllOfTheLights) |
+| Circuit Groups | GRP## | Circuit group parent (OBJTYP=CIRCUIT) | GRP01 (AllOfTheLights) |
 | Circuit Group Members | c#### | Individual circuits within a group | c0101, c0102 |
 
 ### Key Parameters by Object Type
@@ -416,9 +416,16 @@ Query all objects in the system without filtering by type - useful for equipment
 - **REMOTE**: Remote control devices
 - **CIRCGRP**: Circuit group members (for light shows and synchronized circuits)
 
-### Circuit Groups (Light Shows)
+### Circuit Groups
 
-IntelliCenter supports circuit groups for synchronized control of multiple lights or circuits, commonly used for light shows. Circuit groups consist of a parent group (CIRCUIT with SUBTYP=LITSHO) and member circuits (OBJTYP=CIRCGRP).
+IntelliCenter supports circuit groups for synchronized control of multiple circuits. Circuit groups consist of:
+
+1. **Parent Group (GRP##)**: Has `OBJTYP=CIRCUIT` and appears in circuit queries. Subtypes:
+   - `LITSHO`: Light Show groups (synchronized light control with color themes)
+   - `CIRCGRP`: Feature/Circuit groups (general circuit grouping without light-specific features)
+2. **Member Circuits (c####)**: Have `OBJTYP=CIRCGRP` and reference both the parent group and the actual circuit they control.
+
+**Key Insight**: The parent group (e.g., GRP01 "AllOfTheLights") is returned in `OBJTYP=CIRCUIT` queries, while the member circuits (e.g., c0101, c0102) are returned in `OBJTYP=CIRCGRP` queries. Each member's `CIRCUIT` parameter references the actual equipment circuit (e.g., C0003 "Pool Light", C0004 "Spa Light").
 
 **Query Circuit Group Members:**
 ```json

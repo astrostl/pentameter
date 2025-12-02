@@ -370,7 +370,9 @@ func TestIsValidCircuit(t *testing.T) {
 		{"FTR01", "Feature", "FEATURE", false}, // FTR objects are now features, not circuits
 		{"C02", "AUX 1", "GENERIC", false},     // Generic AUX circuits are filtered out
 		{"C03", "Custom Circuit", "CUSTOM", true},
-		{"PUMP1", "Pool Pump", "PUMP", false}, // Wrong prefix
+		{"PUMP1", "Pool Pump", "PUMP", false},       // Wrong prefix
+		{"GRP01", "AllOfTheLights", "LITSHO", true}, // Circuit groups
+		{"GRP02", "Another Group", "INTELL", true},  // Circuit group with different subtype
 	}
 
 	for _, test := range tests {
@@ -2327,6 +2329,57 @@ func TestTrackCircGrpNotInListenMode(t *testing.T) {
 	// Should not track when not in listen mode
 	if poolMonitor.previousState != nil {
 		t.Error("previousState should remain nil when not in listen mode")
+	}
+}
+
+func TestResolveCircuitName(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+
+	tests := []struct {
+		name       string
+		objID      string
+		setupNames map[string]string
+		expected   string
+	}{
+		{
+			name:       "returns cached name when found",
+			objID:      "C0004",
+			setupNames: map[string]string{"C0004": "Pool Light"},
+			expected:   "Pool Light",
+		},
+		{
+			name:       "returns objID when not in cache",
+			objID:      "C0005",
+			setupNames: map[string]string{"C0004": "Pool Light"},
+			expected:   "C0005",
+		},
+		{
+			name:       "returns objID when cached name is empty",
+			objID:      "C0006",
+			setupNames: map[string]string{"C0006": ""},
+			expected:   "C0006",
+		},
+		{
+			name:       "handles GRP prefix",
+			objID:      "GRP01",
+			setupNames: map[string]string{"GRP01": "AllOfTheLights"},
+			expected:   "AllOfTheLights",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset the circuitNames map for each test
+			poolMonitor.circuitNames = make(map[string]string)
+			for k, v := range tc.setupNames {
+				poolMonitor.circuitNames[k] = v
+			}
+
+			result := poolMonitor.resolveCircuitName(tc.objID)
+			if result != tc.expected {
+				t.Errorf("resolveCircuitName(%q) = %q, expected %q", tc.objID, result, tc.expected)
+			}
+		})
 	}
 }
 

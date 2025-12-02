@@ -207,6 +207,7 @@ type PoolMonitor struct {
 	pendingRequests        map[string]time.Time      // Track messageID -> request time
 	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
 	circuitFreezeConfig    map[string]bool           // Track circuit objnam -> freeze protection enabled
+	circuitNames           map[string]string         // Track circuit/group objnam -> SNAME for display
 	previousState          *EquipmentState           // Previous state for change detection
 	intelliCenterURL       string
 	intelliCenterIP        string // Store IP separately for re-discovery
@@ -282,6 +283,7 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		pendingRequests:        make(map[string]time.Time),
 		featureConfig:          make(map[string]string),
 		circuitFreezeConfig:    make(map[string]bool),
+		circuitNames:           make(map[string]string),
 		previousState:          nil,
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
@@ -471,6 +473,7 @@ func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time
 		pendingRequests:     make(map[string]time.Time),
 		featureConfig:       pm.featureConfig,
 		circuitFreezeConfig: pm.circuitFreezeConfig,
+		circuitNames:        pm.circuitNames,
 	}
 
 	// Start poller in background with its own connection
@@ -683,13 +686,13 @@ func (pm *PoolMonitor) handleHeaterPush(obj ObjectData, name string) {
 
 func (pm *PoolMonitor) handleCircGrpPush(obj ObjectData) {
 	pm.trackCircGrp(obj)
-	// Log with circuit group details
-	parent := obj.Params["PARENT"]
-	circuit := obj.Params["CIRCUIT"]
+	// Log with resolved circuit group names
+	groupName := pm.resolveCircuitName(obj.Params["PARENT"])
+	circuitName := pm.resolveCircuitName(obj.Params["CIRCUIT"])
 	act := obj.Params["ACT"]
 	use := obj.Params["USE"]
-	log.Printf("PUSH: CircGrp %s parent=%s circuit=%s act=%s use=%s",
-		obj.ObjName, parent, circuit, act, use)
+	log.Printf("PUSH: CircGrp %s/%s act=%s use=%s",
+		groupName, circuitName, act, use)
 }
 
 func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
@@ -1092,6 +1095,9 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 		return
 	}
 
+	// Cache circuit name for display in circuit group logging
+	pm.circuitNames[obj.ObjName] = name
+
 	// Separate features (FTR) from circuits (C)
 	if strings.HasPrefix(obj.ObjName, "FTR") {
 		pm.processFeatureObject(obj, name, status, subtype, freezeEnabled)
@@ -1103,7 +1109,8 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 }
 
 func (pm *PoolMonitor) isValidCircuit(objName, name, subtype string) bool {
-	hasValidPrefix := strings.HasPrefix(objName, "C")
+	// Accept regular circuits (C prefix) and circuit groups (GRP prefix)
+	hasValidPrefix := strings.HasPrefix(objName, "C") || strings.HasPrefix(objName, "GRP")
 	isGenericAux := strings.HasPrefix(objName, "C") && strings.HasPrefix(name, "AUX ") && subtype == "GENERIC"
 	return hasValidPrefix && !isGenericAux
 }
@@ -1913,11 +1920,15 @@ func (pm *PoolMonitor) trackCircGrp(obj ObjectData) {
 	prevState, exists := pm.previousState.CircGrps[objName]
 	pm.previousState.CircGrps[objName] = newState
 
+	// Resolve parent group and circuit names for display
+	groupName := pm.resolveCircuitName(newState.Parent)
+	circuitName := pm.resolveCircuitName(newState.Circuit)
+
 	if !exists {
 		// First time seeing this circuit group member - only log on initial poll
 		if !pm.initialPollDone {
-			log.Printf("POLL: CircGrp %s detected: parent=%s circuit=%s act=%s use=%s",
-				objName, newState.Parent, newState.Circuit, newState.Active, newState.Use)
+			log.Printf("POLL: CircGrp %s/%s detected: act=%s use=%s",
+				groupName, circuitName, newState.Active, newState.Use)
 		}
 		return
 	}
@@ -1929,9 +1940,17 @@ func (pm *PoolMonitor) trackCircGrp(obj ObjectData) {
 	// Log what changed
 	changes := pm.buildCircGrpChanges(prevState, newState)
 	if len(changes) > 0 {
-		pm.logPollChangef("CircGrp %s changed: %s (parent=%s circuit=%s)",
-			objName, strings.Join(changes, " "), newState.Parent, newState.Circuit)
+		pm.logPollChangef("CircGrp %s/%s changed: %s",
+			groupName, circuitName, strings.Join(changes, " "))
 	}
+}
+
+// resolveCircuitName returns the SNAME for a circuit/group ID, or the ID itself if not found.
+func (pm *PoolMonitor) resolveCircuitName(objID string) string {
+	if name, ok := pm.circuitNames[objID]; ok && name != "" {
+		return name
+	}
+	return objID
 }
 
 func (pm *PoolMonitor) buildCircGrpChanges(prevState, newState CircGrpState) []string {

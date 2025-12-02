@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2025-12-01
+
+### Changed
+- **Circuit group logging now shows human-readable names** - Listen mode circuit group output now displays actual circuit/group names (e.g., "AllOfTheLights/Pool Light") instead of object IDs (e.g., "GRP01/C0003")
+- Circuit groups (GRP prefix) are now recognized as valid circuits for monitoring purposes
+
+### Documentation
+- Clarified API.md circuit group documentation to distinguish LITSHO (light show) from CIRCGRP (general circuit group) subtypes
+- Added key insight about parent groups (OBJTYP=CIRCUIT) vs member circuits (OBJTYP=CIRCGRP)
+
+### Code Quality
+- Added `circuitNames` map to cache circuit name lookups for display purposes
+- Added `resolveCircuitName` helper function with comprehensive test coverage
+- Extended `isValidCircuit` to accept GRP prefix for circuit groups
+
 ## [0.4.1] - 2025-12-01
 
 ### Added
