@@ -317,6 +317,8 @@ The `GetParamList` command retrieves current operational data for monitoring.
 | Heaters | H#### | Heating equipment | H0001 (UltraTemp), H0002 (Gas Heater) |
 | Pumps | PMP## | Variable speed pumps | PMP01 (VS), PMP02 (pool) |
 | Sensors | Various | Temperature sensors | _A135 (Air), SSS11 (Solar) |
+| Light Show Groups | GRP## | Circuit group parent (SUBTYP=LITSHO) | GRP01 (AllOfTheLights) |
+| Circuit Group Members | c#### | Individual circuits within a group | c0101, c0102 |
 
 ### Key Parameters by Object Type
 
@@ -341,6 +343,15 @@ The `GetParamList` command retrieves current operational data for monitoring.
 - **SNAME**: Display name
 - **PROBE**: Temperature reading (°F)
 - **SUBTYP**: Sensor type (AIR, POOL, SOLAR)
+
+**Circuit Groups (OBJTYP=CIRCGRP):**
+- **PARENT**: Parent group ID (e.g., "GRP01")
+- **CIRCUIT**: Referenced circuit ID (e.g., "C0003", "C0004")
+- **ACT**: Active state ("ON"/"OFF")
+- **USE**: Color/mode setting (e.g., "White", "Blue", "Red")
+- **DLY**: Delay setting
+- **LISTORD**: List order within group
+- **STATIC**: Static mode flag ("ON"/"OFF")
 
 ## Response Codes
 
@@ -403,6 +414,131 @@ Query all objects in the system without filtering by type - useful for equipment
 - **VALVE**: Valve actuators
 - **CHEM**: Chemical monitoring equipment
 - **REMOTE**: Remote control devices
+- **CIRCGRP**: Circuit group members (for light shows and synchronized circuits)
+
+### Circuit Groups (Light Shows)
+
+IntelliCenter supports circuit groups for synchronized control of multiple lights or circuits, commonly used for light shows. Circuit groups consist of a parent group (CIRCUIT with SUBTYP=LITSHO) and member circuits (OBJTYP=CIRCGRP).
+
+**Query Circuit Group Members:**
+```json
+{
+  "messageID": "circgrp-001",
+  "command": "GetParamList",
+  "condition": "OBJTYP=CIRCGRP",
+  "objectList": [{"objnam": "INCR", "keys": ["OBJTYP", "PARENT", "CIRCUIT", "ACT", "USE", "DLY", "LISTORD", "STATIC"]}]
+}
+```
+
+**Response Example:**
+```json
+{
+  "command": "SendParamList",
+  "messageID": "circgrp-001",
+  "response": "200",
+  "objectList": [
+    {
+      "objnam": "c0101",
+      "params": {
+        "OBJTYP": "CIRCGRP",
+        "PARENT": "GRP01",
+        "CIRCUIT": "C0004",
+        "ACT": "ON",
+        "USE": "White",
+        "DLY": "0",
+        "LISTORD": "1",
+        "STATIC": "OFF"
+      }
+    },
+    {
+      "objnam": "c0102",
+      "params": {
+        "OBJTYP": "CIRCGRP",
+        "PARENT": "GRP01",
+        "CIRCUIT": "C0003",
+        "ACT": "ON",
+        "USE": "White",
+        "DLY": "0",
+        "LISTORD": "2",
+        "STATIC": "OFF"
+      }
+    }
+  ]
+}
+```
+
+**Query Parent Group:**
+```json
+{
+  "messageID": "grp-001",
+  "command": "GetParamList",
+  "condition": "",
+  "objectList": [{"objnam": "GRP01", "keys": ["SNAME", "STATUS", "OBJTYP", "SUBTYP", "ACT"]}]
+}
+```
+
+**Parent Group Response:**
+```json
+{
+  "objnam": "GRP01",
+  "params": {
+    "SNAME": "AllOfTheLights",
+    "STATUS": "OFF",
+    "OBJTYP": "CIRCUIT",
+    "SUBTYP": "LITSHO",
+    "ACT": "WHITER"
+  }
+}
+```
+
+**Key Parameters:**
+
+| Parameter | Description | Values |
+|-----------|-------------|--------|
+| PARENT | Parent group ID | GRP01, GRP02, etc. |
+| CIRCUIT | Referenced circuit ID | C0003, C0004, etc. |
+| ACT | Active state in group | ON, OFF |
+| USE | Color/mode setting | White, Blue, Red, Green, etc. |
+| DLY | Delay between activations | 0, 1, 2, etc. (seconds) |
+| LISTORD | Order within group | 1, 2, 3, etc. |
+| STATIC | Static mode (no color cycling) | ON, OFF |
+
+**Push Notifications:**
+
+Circuit groups generate push notifications when activated/deactivated:
+```json
+{
+  "command": "WriteParamList",
+  "messageID": "uuid-generated",
+  "response": "200",
+  "objectList": [
+    {
+      "changes": [
+        {
+          "objnam": "c0101",
+          "params": {
+            "ACT": "ON",
+            "CIRCUIT": "C0004",
+            "DLY": "0",
+            "LISTORD": "1",
+            "OBJNAM": "c0101",
+            "OBJTYP": "CIRCGRP",
+            "PARENT": "GRP01",
+            "STATIC": "OFF",
+            "USE": "White"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Use Cases:**
+- **Light Shows**: Synchronized color patterns across multiple pool/spa lights
+- **Group Control**: Turn multiple circuits on/off together
+- **Sequenced Activation**: Delayed activation of circuits using DLY parameter
+- **Color Coordination**: Same USE value across group members for uniform appearance
 
 ### Temperature Sensor Discovery
 

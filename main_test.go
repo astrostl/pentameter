@@ -22,6 +22,10 @@ const (
 	testIntelliCenterURL  = "ws://192.168.1.100:6680" // Test IntelliCenter WebSocket URL.
 	testIntelliCenterIP   = "192.168.1.100"           // Test IntelliCenter IP address.
 	testIntelliCenterPort = "6680"                    // Test IntelliCenter port.
+	testCircGrpParent     = "GRP01"                   // Test circuit group parent ID.
+	testCircGrpCircuit    = "C0004"                   // Test circuit group circuit reference.
+	testCircGrpUseWhite   = "White"                   // Test circuit group color/mode (white).
+	testCircGrpUseBlue    = "Blue"                    // Test circuit group color/mode (blue).
 )
 
 // Test helper to create a mock WebSocket server.
@@ -2105,6 +2109,9 @@ func TestInitializeState(t *testing.T) {
 	if poolMonitor.previousState.Features == nil {
 		t.Error("Features map should be initialized")
 	}
+	if poolMonitor.previousState.CircGrps == nil {
+		t.Error("CircGrps map should be initialized")
+	}
 	if poolMonitor.previousState.UnknownEquip == nil {
 		t.Error("UnknownEquip map should be initialized")
 	}
@@ -2250,6 +2257,239 @@ func TestTrackFeatureInListenMode(t *testing.T) {
 	poolMonitor.trackFeature("Spa Jets", testStatusOn)
 	if poolMonitor.previousState.Features["Spa Jets"] != testStatusOn {
 		t.Errorf("Expected Spa Jets status ON, got %v", poolMonitor.previousState.Features["Spa Jets"])
+	}
+}
+
+func TestTrackCircGrpInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+
+	// First call - should detect new circuit group member
+	obj := ObjectData{
+		ObjName: "c0101",
+		Params: map[string]string{
+			"ACT":     testStatusOn,
+			"USE":     testCircGrpUseWhite,
+			"CIRCUIT": testCircGrpCircuit,
+			"PARENT":  testCircGrpParent,
+		},
+	}
+	poolMonitor.trackCircGrp(obj)
+
+	if poolMonitor.previousState == nil {
+		t.Error("previousState should be initialized")
+	}
+
+	state := poolMonitor.previousState.CircGrps["c0101"]
+	if state.Active != testStatusOn {
+		t.Errorf("Expected ACT %s, got %v", testStatusOn, state.Active)
+	}
+	if state.Use != testCircGrpUseWhite {
+		t.Errorf("Expected USE %s, got %v", testCircGrpUseWhite, state.Use)
+	}
+	if state.Circuit != testCircGrpCircuit {
+		t.Errorf("Expected CIRCUIT %s, got %v", testCircGrpCircuit, state.Circuit)
+	}
+	if state.Parent != testCircGrpParent {
+		t.Errorf("Expected PARENT %s, got %v", testCircGrpParent, state.Parent)
+	}
+
+	// Second call with same state - should not log change
+	poolMonitor.trackCircGrp(obj)
+
+	// Third call with changed state - should log change
+	obj.Params["ACT"] = testStatusOff
+	obj.Params["USE"] = testCircGrpUseBlue
+	poolMonitor.trackCircGrp(obj)
+
+	state = poolMonitor.previousState.CircGrps["c0101"]
+	if state.Active != testStatusOff {
+		t.Errorf("Expected ACT %s after change, got %v", testStatusOff, state.Active)
+	}
+	if state.Use != testCircGrpUseBlue {
+		t.Errorf("Expected USE %s after change, got %v", testCircGrpUseBlue, state.Use)
+	}
+}
+
+func TestTrackCircGrpNotInListenMode(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+
+	obj := ObjectData{
+		ObjName: "c0101",
+		Params: map[string]string{
+			"ACT":     testStatusOn,
+			"USE":     testCircGrpUseWhite,
+			"CIRCUIT": testCircGrpCircuit,
+			"PARENT":  testCircGrpParent,
+		},
+	}
+	poolMonitor.trackCircGrp(obj)
+
+	// Should not track when not in listen mode
+	if poolMonitor.previousState != nil {
+		t.Error("previousState should remain nil when not in listen mode")
+	}
+}
+
+func TestBuildCircGrpChanges(t *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+
+	tests := []struct {
+		name     string
+		prev     CircGrpState
+		new      CircGrpState
+		expected int
+	}{
+		{
+			name:     "no changes",
+			prev:     CircGrpState{Active: testStatusOn, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			new:      CircGrpState{Active: testStatusOn, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			expected: 0,
+		},
+		{
+			name:     "ACT changed",
+			prev:     CircGrpState{Active: testStatusOn, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			new:      CircGrpState{Active: testStatusOff, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			expected: 1,
+		},
+		{
+			name:     "USE changed",
+			prev:     CircGrpState{Active: testStatusOn, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			new:      CircGrpState{Active: testStatusOn, Use: testCircGrpUseBlue, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			expected: 1,
+		},
+		{
+			name:     "both changed",
+			prev:     CircGrpState{Active: testStatusOn, Use: testCircGrpUseWhite, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			new:      CircGrpState{Active: testStatusOff, Use: testCircGrpUseBlue, Circuit: testCircGrpCircuit, Parent: testCircGrpParent},
+			expected: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			changes := poolMonitor.buildCircGrpChanges(tc.prev, tc.new)
+			if len(changes) != tc.expected {
+				t.Errorf("Expected %d changes, got %d", tc.expected, len(changes))
+			}
+		})
+	}
+}
+
+func TestHandleCircGrpPush(_ *testing.T) {
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	obj := ObjectData{
+		ObjName: "c0101",
+		Params: map[string]string{
+			"OBJTYP":  objTypeCircGrp,
+			"PARENT":  testCircGrpParent,
+			"CIRCUIT": testCircGrpCircuit,
+			"ACT":     testStatusOn,
+			"USE":     testCircGrpUseWhite,
+		},
+	}
+
+	// Should not panic and should log appropriately
+	poolMonitor.handleCircGrpPush(obj)
+}
+
+func TestGetCircuitGroups(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=CIRCGRP": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "c0101",
+					Params: map[string]string{
+						"OBJTYP":  objTypeCircGrp,
+						"PARENT":  testCircGrpParent,
+						"CIRCUIT": testCircGrpCircuit,
+						"ACT":     testStatusOn,
+						"USE":     testCircGrpUseWhite,
+						"DLY":     "0",
+						"LISTORD": "1",
+						"STATIC":  testStatusOff,
+					},
+				},
+				{
+					ObjName: "c0102",
+					Params: map[string]string{
+						"OBJTYP":  objTypeCircGrp,
+						"PARENT":  testCircGrpParent,
+						"CIRCUIT": "C0003",
+						"ACT":     testStatusOn,
+						"USE":     testCircGrpUseBlue,
+						"DLY":     "0",
+						"LISTORD": "2",
+						"STATIC":  testStatusOff,
+					},
+				},
+			},
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.getCircuitGroups()
+	if err != nil {
+		t.Fatalf("getCircuitGroups failed: %v", err)
+	}
+
+	// Verify circuit groups were tracked
+	if poolMonitor.previousState == nil {
+		t.Fatal("previousState should be initialized")
+	}
+
+	state1 := poolMonitor.previousState.CircGrps["c0101"]
+	if state1.Active != testStatusOn || state1.Use != testCircGrpUseWhite || state1.Circuit != testCircGrpCircuit || state1.Parent != testCircGrpParent {
+		t.Errorf("c0101 not tracked correctly: %+v", state1)
+	}
+
+	state2 := poolMonitor.previousState.CircGrps["c0102"]
+	if state2.Active != testStatusOn || state2.Use != testCircGrpUseBlue || state2.Circuit != "C0003" || state2.Parent != testCircGrpParent {
+		t.Errorf("c0102 not tracked correctly: %+v", state2)
+	}
+}
+
+func TestGetCircuitGroupsAPIError(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=CIRCGRP": {
+			Command:  "GetParamList",
+			Response: "500",
+		},
+	}
+
+	server := createMockWebSocketServer(t, responses)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	err := poolMonitor.getCircuitGroups()
+	if err == nil {
+		t.Error("Expected error for 500 response")
 	}
 }
 
@@ -2511,6 +2751,22 @@ func TestListenModeIntegration(t *testing.T) {
 				},
 			},
 		},
+		"GetParamList:OBJTYP=CIRCGRP": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "c0101",
+					Params: map[string]string{
+						"OBJTYP":  objTypeCircGrp,
+						"PARENT":  testCircGrpParent,
+						"CIRCUIT": testCircGrpCircuit,
+						"ACT":     testStatusOn,
+						"USE":     testCircGrpUseWhite,
+					},
+				},
+			},
+		},
 	}
 
 	server := createMockWebSocketServer(t, responses)
@@ -2550,8 +2806,14 @@ func TestListenModeIntegration(t *testing.T) {
 		t.Error("Pool Pump RPM should be tracked")
 	}
 
-	if poolMonitor.previousState.Circuits["Pool Light"] != "ON" {
+	if poolMonitor.previousState.Circuits["Pool Light"] != testStatusOn {
 		t.Error("Pool Light should be tracked")
+	}
+
+	// Verify circuit group was tracked
+	circGrpState := poolMonitor.previousState.CircGrps["c0101"]
+	if circGrpState.Active != testStatusOn || circGrpState.Use != testCircGrpUseWhite {
+		t.Errorf("CircGrp c0101 should be tracked: %+v", circGrpState)
 	}
 
 	// Second call - should not log anything (no changes)
@@ -3250,6 +3512,19 @@ func TestProcessPushObject(t *testing.T) {
 					"SNAME":  "Pool Heater",
 					"OBJTYP": "HEATER",
 					"STATUS": "ON",
+				},
+			},
+		},
+		{
+			name: "routes CIRCGRP type",
+			obj: ObjectData{
+				ObjName: "c0101",
+				Params: map[string]string{
+					"OBJTYP":  objTypeCircGrp,
+					"PARENT":  testCircGrpParent,
+					"CIRCUIT": testCircGrpCircuit,
+					"ACT":     testStatusOn,
+					"USE":     testCircGrpUseWhite,
 				},
 			},
 		},

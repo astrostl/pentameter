@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2025-12-01
+
+### Added
+- **Circuit Group (Light Show) monitoring in listen mode** - Tracks CIRCGRP objects for synchronized light shows and circuit groups
+- Circuit group state tracking including parent group, circuit reference, active state, and color/mode (USE parameter)
+- Push notification handling for circuit group changes with `PUSH: CircGrp` prefix
+- Poll-based discovery of circuit group members during listen mode
+
+### Documentation
+- Added comprehensive Circuit Groups section to API.md with query examples and response formats
+- Documented CIRCGRP object type parameters (PARENT, CIRCUIT, ACT, USE, DLY, LISTORD, STATIC)
+- Added local build guidelines to CLAUDE.md
+
+### Code Quality
+- Added CircGrpState struct for proper circuit group state management
+- Added comprehensive tests for circuit group tracking functionality
+- Extended equipment state tracking to include CircGrps map
+
 ## [0.4.0] - 2025-11-28
 
 ### Fixed

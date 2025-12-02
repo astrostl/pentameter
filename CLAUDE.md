@@ -43,6 +43,25 @@ make quality      # Run all quality checks (warnings for lint/cyclo issues)
 make quality-strict # Run all quality checks with strict enforcement
 ```
 
+### Local Builds
+
+**IMPORTANT**: Always build binaries in the project directory, not `/tmp` or other locations.
+
+```bash
+# Correct - builds in project directory
+go build -o pentameter .
+./pentameter --listen --ic-ip 192.168.50.118
+
+# Or use the Makefile
+make build
+./pentameter --listen
+```
+
+Building in the project directory ensures:
+- Consistent paths for testing and debugging
+- Binary is version-controlled location (though ignored by .gitignore)
+- Easy cleanup with `make clean`
+
 ### Release Process
 
 **⚠️ See [RELEASE.md](RELEASE.md) for the complete release checklist ⚠️**

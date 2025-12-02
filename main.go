@@ -74,6 +74,7 @@ const (
 	objTypeCircuit = "CIRCUIT"
 	objTypePump    = "PUMP"
 	objTypeHeater  = "HEATER"
+	objTypeCircGrp = "CIRCGRP"
 
 	// Reconnect retry delay.
 	reconnectRetryDelay = 5 * time.Second
@@ -222,16 +223,25 @@ type PoolMonitor struct {
 	disableAutoRediscovery bool // Disable automatic re-discovery (for testing)
 }
 
+// CircGrpState tracks the state of a circuit group member.
+type CircGrpState struct {
+	Active  string // ACT: ON/OFF
+	Use     string // USE: color/mode (e.g., "White", "Blue")
+	Circuit string // CIRCUIT: referenced circuit ID (e.g., "C0003")
+	Parent  string // PARENT: parent group ID (e.g., "GRP01")
+}
+
 // EquipmentState tracks the current state of all equipment for change detection.
 type EquipmentState struct {
-	WaterTemps      map[string]float64 // body -> temperature
-	PumpRPMs        map[string]float64 // pump -> RPM
-	Circuits        map[string]string  // circuit -> ON/OFF
-	Thermals        map[string]int     // heater -> status (0=off, 1=heating, 2=idle, 3=cooling)
-	Features        map[string]string  // feature -> ON/OFF
-	UnknownEquip    map[string]string  // objnam -> "OBJTYP:STATUS" for equipment not otherwise tracked
-	ParseErrors     map[string]bool    // Track parse errors we've already logged
-	SkippedFeatures map[string]bool    // Track skipped features we've already logged
+	WaterTemps      map[string]float64      // body -> temperature
+	PumpRPMs        map[string]float64      // pump -> RPM
+	Circuits        map[string]string       // circuit -> ON/OFF
+	Thermals        map[string]int          // heater -> status (0=off, 1=heating, 2=idle, 3=cooling)
+	Features        map[string]string       // feature -> ON/OFF
+	CircGrps        map[string]CircGrpState // circgrp objnam -> state
+	UnknownEquip    map[string]string       // objnam -> "OBJTYP:STATUS" for equipment not otherwise tracked
+	ParseErrors     map[string]bool         // Track parse errors we've already logged
+	SkippedFeatures map[string]bool         // Track skipped features we've already logged
 	AirTemp         float64
 	PollChangeCount int // Count changes detected during current poll
 }
@@ -635,6 +645,8 @@ func (pm *PoolMonitor) processPushObject(obj ObjectData) {
 		pm.handleCircuitPush(obj, name)
 	case objTypeHeater:
 		pm.handleHeaterPush(obj, name)
+	case objTypeCircGrp:
+		pm.handleCircGrpPush(obj)
 	default:
 		pm.handleUnknownPush(obj)
 	}
@@ -667,6 +679,17 @@ func (pm *PoolMonitor) handleCircuitPush(obj ObjectData, name string) {
 func (pm *PoolMonitor) handleHeaterPush(obj ObjectData, name string) {
 	pm.processHeaterObject(obj)
 	log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params["STATUS"], obj.Params["MODE"])
+}
+
+func (pm *PoolMonitor) handleCircGrpPush(obj ObjectData) {
+	pm.trackCircGrp(obj)
+	// Log with circuit group details
+	parent := obj.Params["PARENT"]
+	circuit := obj.Params["CIRCUIT"]
+	act := obj.Params["ACT"]
+	use := obj.Params["USE"]
+	log.Printf("PUSH: CircGrp %s parent=%s circuit=%s act=%s use=%s",
+		obj.ObjName, parent, circuit, act, use)
 }
 
 func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
@@ -713,8 +736,12 @@ func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
 		return fmt.Errorf("failed to get thermal status: %w", err)
 	}
 
-	// In listen mode, query ALL objects to discover unknown equipment
+	// In listen mode, query circuit groups and ALL objects to discover unknown equipment
 	if pm.listenMode {
+		if err := pm.getCircuitGroups(); err != nil {
+			// Don't fail the whole poll if this fails, just log it
+			pm.logIfNotListeningf("Warning: failed to get circuit groups: %v", err)
+		}
 		if err := pm.getAllObjects(); err != nil {
 			// Don't fail the whole poll if this fails, just log it
 			pm.logIfNotListeningf("Warning: failed to get all objects: %v", err)
@@ -1243,6 +1270,49 @@ func (pm *PoolMonitor) getThermalStatus() error {
 	return nil
 }
 
+func (pm *PoolMonitor) getCircuitGroups() error {
+	messageID := fmt.Sprintf("circgrp-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+	sentTime := time.Now()
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:   "GetParamList",
+		Condition: "OBJTYP=CIRCGRP",
+		ObjectList: []ObjectQuery{
+			{
+				ObjName: "INCR",
+				Keys:    []string{"OBJTYP", "PARENT", "CIRCUIT", "ACT", "USE", "DLY", "LISTORD", "STATIC"},
+			},
+		},
+	}
+
+	pm.pendingRequests[messageID] = sentTime
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send circuit group request: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read circuit group response: %w", err)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("circuit group API request failed with response: %s", resp.Response)
+	}
+
+	// Process circuit group data
+	for _, obj := range resp.ObjectList {
+		pm.trackCircGrp(obj)
+	}
+
+	return nil
+}
+
 func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 	name := obj.Params["SNAME"]
 	subtype := obj.Params["SUBTYP"]
@@ -1691,6 +1761,7 @@ func (pm *PoolMonitor) initializeState() {
 		Circuits:        make(map[string]string),
 		Thermals:        make(map[string]int),
 		Features:        make(map[string]string),
+		CircGrps:        make(map[string]CircGrpState),
 		UnknownEquip:    make(map[string]string),
 		ParseErrors:     make(map[string]bool),
 		SkippedFeatures: make(map[string]bool),
@@ -1823,6 +1894,57 @@ func (pm *PoolMonitor) trackFeature(name, status string) {
 	pm.previousState.Features[name] = status
 }
 
+func (pm *PoolMonitor) trackCircGrp(obj ObjectData) {
+	if !pm.listenMode {
+		return
+	}
+	if pm.previousState == nil {
+		pm.initializeState()
+	}
+
+	objName := obj.ObjName
+	newState := CircGrpState{
+		Active:  obj.Params["ACT"],
+		Use:     obj.Params["USE"],
+		Circuit: obj.Params["CIRCUIT"],
+		Parent:  obj.Params["PARENT"],
+	}
+
+	prevState, exists := pm.previousState.CircGrps[objName]
+	pm.previousState.CircGrps[objName] = newState
+
+	if !exists {
+		// First time seeing this circuit group member - only log on initial poll
+		if !pm.initialPollDone {
+			log.Printf("POLL: CircGrp %s detected: parent=%s circuit=%s act=%s use=%s",
+				objName, newState.Parent, newState.Circuit, newState.Active, newState.Use)
+		}
+		return
+	}
+
+	if prevState == newState {
+		return
+	}
+
+	// Log what changed
+	changes := pm.buildCircGrpChanges(prevState, newState)
+	if len(changes) > 0 {
+		pm.logPollChangef("CircGrp %s changed: %s (parent=%s circuit=%s)",
+			objName, strings.Join(changes, " "), newState.Parent, newState.Circuit)
+	}
+}
+
+func (pm *PoolMonitor) buildCircGrpChanges(prevState, newState CircGrpState) []string {
+	var changes []string
+	if prevState.Active != newState.Active {
+		changes = append(changes, fmt.Sprintf("act=%s→%s", prevState.Active, newState.Active))
+	}
+	if prevState.Use != newState.Use {
+		changes = append(changes, fmt.Sprintf("use=%s→%s", prevState.Use, newState.Use))
+	}
+	return changes
+}
+
 func (pm *PoolMonitor) getAllObjects() error {
 	messageID := fmt.Sprintf("all-objects-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
 
@@ -1878,7 +2000,7 @@ func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
 
 	// Skip if already handled by specific equipment types
 	switch objType {
-	case "BODY", "PUMP", "CIRCUIT", "HEATER":
+	case "BODY", "PUMP", "CIRCUIT", "HEATER", "CIRCGRP":
 		return // Already tracked by specific handlers
 	case "":
 		return // No object type, skip
