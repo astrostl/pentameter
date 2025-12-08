@@ -1197,6 +1197,7 @@ This behavior:
 - Uses the freeze-configured speed (sufficient for preventing pipe damage)
 - Is more energy-efficient than running at higher heating speeds
 - Overrides pump speed settings from other active circuits
+- **Applies even to user-selected circuits**: If a user manually turns on Spa Jets (3400 RPM) while freeze protection is active, the pump will still run at the freeze speed (2000 RPM), not the Jets speed
 
 ### IntelliBrite Color-Changing Lights
 
