@@ -275,12 +275,12 @@ When the user asks for circuit status, query **ALL circuits (regular and feature
 
 **Query all regular circuits (C0001-C0011):**
 ```bash
-echo '{"messageID":"circuits","command":"GetParamList","condition":"OBJTYP=CIRCUIT","objectList":[{"objnam":"C0001","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0002","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0003","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0004","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0005","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0006","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0007","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0008","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0009","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0010","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0011","keys":["SNAME","STATUS","FREEZE"]}]}' | timeout 5 websocat -n1 ws://192.168.50.118:6680
+echo '{"messageID":"circuits","command":"GetParamList","condition":"OBJTYP=CIRCUIT","objectList":[{"objnam":"C0001","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0002","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0003","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0004","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0005","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0006","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0007","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0008","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0009","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0010","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"C0011","keys":["SNAME","STATUS","FREEZE"]}]}' | timeout 5 websocat -n1 ws://$PENTAMETER_IC_IP:6680
 ```
 
 **Query all feature circuits (FTR01-FTR08):**
 ```bash
-echo '{"messageID":"features","command":"GetParamList","condition":"OBJTYP=CIRCUIT","objectList":[{"objnam":"FTR01","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR02","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR03","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR04","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR05","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR06","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR07","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR08","keys":["SNAME","STATUS","FREEZE"]}]}' | timeout 5 websocat -n1 ws://192.168.50.118:6680
+echo '{"messageID":"features","command":"GetParamList","condition":"OBJTYP=CIRCUIT","objectList":[{"objnam":"FTR01","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR02","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR03","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR04","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR05","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR06","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR07","keys":["SNAME","STATUS","FREEZE"]},{"objnam":"FTR08","keys":["SNAME","STATUS","FREEZE"]}]}' | timeout 5 websocat -n1 ws://$PENTAMETER_IC_IP:6680
 ```
 
 **Present results in two tables:**
