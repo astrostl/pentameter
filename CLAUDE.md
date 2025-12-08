@@ -269,6 +269,20 @@ echo '{"command":"GetHardwareDefinition"}' | websocat ws://$PENTAMETER_IC_IP:668
 
 API.md contains the definitive reference for all IntelliCenter commands, object types, push notifications, and protocol details.
 
+### Live Circuit Status Queries
+
+When querying live circuit status, **always include the FREEZE parameter** to distinguish between user-activated circuits and freeze protection:
+
+```bash
+# Query circuit status with freeze protection info
+echo '{"messageID":"status","command":"GetParamList","condition":"OBJTYP=CIRCUIT","objectList":[{"objnam":"C0001","keys":["SNAME","STATUS","FREEZE"]}]}' | websocat ws://$PENTAMETER_IC_IP:6680
+```
+
+**Response interpretation:**
+- `STATUS=ON, FREEZE=OFF` → Circuit is running normally (user-activated or scheduled)
+- `STATUS=ON, FREEZE=ON` → Circuit is running due to freeze protection
+- `STATUS=OFF, FREEZE=OFF` → Circuit is off
+
 ### Temperature Units
 
 **IMPORTANT**: This project uses Fahrenheit for all temperature metrics, not Celsius.
