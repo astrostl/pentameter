@@ -11,6 +11,7 @@ This application must work with ANY IntelliCenter configuration, not just our sp
 - **NO assumptions about specific circuits** (e.g., C0001=Spa, C0002=Air Blower)
 - **NO name-based logic** (e.g., if name contains "heat" then...)
 - **NO configuration-specific filtering** (e.g., skip FTR01 because it's heating)
+- **NO real IP addresses in documentation** - use `$PENTAMETER_IC_IP` or placeholder IPs like `192.168.1.100`
 
 ### Required Practices:
 - **Use IntelliCenter's official metadata** (OBJTYP, SUBTYP, object IDs)
@@ -50,7 +51,7 @@ make quality-strict # Run all quality checks with strict enforcement
 ```bash
 # Correct - builds in project directory
 go build -o pentameter .
-./pentameter --listen --ic-ip 192.168.50.118
+./pentameter --listen --ic-ip 192.168.1.100
 
 # Or use the Makefile
 make build
