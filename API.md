@@ -1197,3 +1197,115 @@ This behavior:
 - Uses the freeze-configured speed (sufficient for preventing pipe damage)
 - Is more energy-efficient than running at higher heating speeds
 - Overrides pump speed settings from other active circuits
+
+### IntelliBrite Color-Changing Lights
+
+IntelliCenter supports IntelliBrite (SUBTYP=INTELLI) color-changing LED pool lights with fixed colors and animated light shows. Colors and shows are controlled via the `USE` parameter.
+
+**Query IntelliBrite Circuit:**
+```json
+{
+  "messageID": "intellibrite-001",
+  "command": "GetParamList",
+  "objectList": [{"objnam": "C0007", "keys": ["SNAME", "STATUS", "SUBTYP", "USE", "USAGE"]}]
+}
+```
+
+**Response:**
+```json
+{
+  "objnam": "C0007",
+  "params": {
+    "SNAME": "Pool Light",
+    "STATUS": "ON",
+    "SUBTYP": "INTELLI",
+    "USE": "BLUER",
+    "USAGE": "shdyMbaSowglTeQ"
+  }
+}
+```
+
+**Key Parameters:**
+- **USE**: Current color or light show mode (see tables below)
+- **USAGE**: Encoded capability mask indicating available options for this circuit type
+- **SUBTYP**: `INTELLI` for IntelliBrite lights
+
+#### Fixed Colors (5)
+
+| Code | Display Name |
+|------|--------------|
+| `WHITER` | White |
+| `REDR` | Red |
+| `GREENR` | Green |
+| `BLUER` | Blue |
+| `MAGNTAR` | Magenta |
+
+#### Light Shows (7)
+
+| Code | Display Name |
+|------|--------------|
+| `SAMMOD` | Sam |
+| `PARTY` | Party |
+| `ROMAN` | Romance |
+| `CARIB` | Caribbean |
+| `AMERCA` | American |
+| `SSET` | California Sunset |
+| `ROYAL` | Royal |
+
+**Push Notification Example (Light Show Change):**
+```json
+{
+  "command": "WriteParamList",
+  "messageID": "uuid-generated",
+  "response": "200",
+  "objectList": [
+    {
+      "changes": [
+        {
+          "objnam": "GRP01",
+          "params": {
+            "ACT": "AMERCA",
+            "SNAME": "All Pool lights",
+            "STATUS": "ON",
+            "SUBTYP": "LITSHO",
+            "USE": "AMERCA"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Light Show Groups (LITSHO):**
+
+IntelliBrite lights can be organized into light show groups (SUBTYP=LITSHO) for synchronized color control:
+
+```json
+{
+  "objnam": "GRP01",
+  "params": {
+    "OBJTYP": "CIRCUIT",
+    "SUBTYP": "LITSHO",
+    "SNAME": "All Pool lights",
+    "USE": "AMERCA",
+    "ACT": "AMERCA",
+    "CHILD": "C0009 C0017 C0019"
+  }
+}
+```
+
+**Key Light Show Group Parameters:**
+- **ACT**: Active color/show being displayed
+- **USE**: Selected color/show mode
+- **CHILD**: Space-separated list of member circuit IDs
+- **SYNC**: Synchronization mode (ON/OFF)
+- **SWIM**: Color Swim effect (ON/OFF)
+
+**Related Circuit Types:**
+- `INTELLI`: IntelliBrite color-changing lights
+- `GLOW`: GloBrite color-changing lights
+- `GLOWT`: GloBrite White lights
+- `MAGIC2`: MagicStream laminar jets
+- `CLRCASC`: ColorCascade lights
+- `LITSHO`: Light Show groups
