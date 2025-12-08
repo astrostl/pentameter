@@ -741,7 +741,7 @@ func TestHealthCheckEndpoint(t *testing.T) {
 	}
 }
 
-func TestGetTemperatures(t *testing.T) {
+func TestGetAllEquipmentStatus(t *testing.T) {
 	responses := map[string]IntelliCenterResponse{
 		"GetParamList:OBJTYP=BODY": {
 			Command:  "GetParamList",
@@ -819,19 +819,19 @@ func TestGetTemperatures(t *testing.T) {
 	}
 	defer poolMonitor.Close()
 
-	err := poolMonitor.GetTemperatures(ctx)
+	err := poolMonitor.GetAllEquipmentStatus(ctx)
 	if err != nil {
-		t.Fatalf("GetTemperatures failed: %v", err)
+		t.Fatalf("GetAllEquipmentStatus failed: %v", err)
 	}
 }
 
-func TestGetTemperaturesWithoutConnection(t *testing.T) {
+func TestGetAllEquipmentStatusWithoutConnection(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 	ctx := t.Context()
 
-	err := poolMonitor.GetTemperatures(ctx)
+	err := poolMonitor.GetAllEquipmentStatus(ctx)
 	if err == nil {
-		t.Error("Expected error when calling GetTemperatures without connection")
+		t.Error("Expected error when calling GetAllEquipmentStatus without connection")
 	}
 
 	if !strings.Contains(err.Error(), "not connected") {
@@ -1154,7 +1154,7 @@ func TestStartTemperaturePollingWithConnectionFailures(t *testing.T) {
 	}
 }
 
-func TestStartTemperaturePollingWithGetTemperaturesFailure(t *testing.T) {
+func TestStartTemperaturePollingWithGetAllEquipmentStatusFailure(t *testing.T) {
 	// Create server that closes connection immediately after upgrade
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(_ *http.Request) bool { return true },
@@ -1192,7 +1192,7 @@ func TestStartTemperaturePollingWithGetTemperaturesFailure(t *testing.T) {
 	}
 }
 
-func TestGetTemperaturesPartialFailures(t *testing.T) {
+func TestGetAllEquipmentStatusPartialFailures(t *testing.T) {
 	// Create server that responds to some requests but not others
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(_ *http.Request) bool { return true },
@@ -1255,9 +1255,9 @@ func TestGetTemperaturesPartialFailures(t *testing.T) {
 	}
 	defer poolMonitor.Close()
 
-	err := poolMonitor.GetTemperatures(ctx)
+	err := poolMonitor.GetAllEquipmentStatus(ctx)
 	if err == nil {
-		t.Error("Expected error due to connection failure during GetTemperatures")
+		t.Error("Expected error due to connection failure during GetAllEquipmentStatus")
 	}
 }
 
@@ -2121,9 +2121,10 @@ func TestInitializeState(t *testing.T) {
 
 func TestTrackWaterTempInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", true)
+	emptyObj := ObjectData{}
 
 	// First call - should detect new equipment
-	poolMonitor.trackWaterTemp("Pool", 82.5)
+	poolMonitor.trackWaterTemp("Pool", 82.5, emptyObj)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
@@ -2134,10 +2135,10 @@ func TestTrackWaterTempInListenMode(t *testing.T) {
 	}
 
 	// Second call with same temp - should not log change
-	poolMonitor.trackWaterTemp("Pool", 82.5)
+	poolMonitor.trackWaterTemp("Pool", 82.5, emptyObj)
 
 	// Third call with different temp - should log change
-	poolMonitor.trackWaterTemp("Pool", 83.0)
+	poolMonitor.trackWaterTemp("Pool", 83.0, emptyObj)
 	if poolMonitor.previousState.WaterTemps["Pool"] != 83.0 {
 		t.Errorf("Expected Pool temp 83.0, got %v", poolMonitor.previousState.WaterTemps["Pool"])
 	}
@@ -2145,8 +2146,9 @@ func TestTrackWaterTempInListenMode(t *testing.T) {
 
 func TestTrackWaterTempNotInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
+	emptyObj := ObjectData{}
 
-	poolMonitor.trackWaterTemp("Pool", 82.5)
+	poolMonitor.trackWaterTemp("Pool", 82.5, emptyObj)
 
 	// Should not initialize state when not in listen mode
 	if poolMonitor.previousState != nil {
@@ -2156,9 +2158,10 @@ func TestTrackWaterTempNotInListenMode(t *testing.T) {
 
 func TestTrackAirTempInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", true)
+	emptyObj := ObjectData{}
 
 	// First call - should detect new temperature
-	poolMonitor.trackAirTemp(75.0)
+	poolMonitor.trackAirTemp(75.0, emptyObj)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
@@ -2169,10 +2172,10 @@ func TestTrackAirTempInListenMode(t *testing.T) {
 	}
 
 	// Second call with same temp - should not log change
-	poolMonitor.trackAirTemp(75.0)
+	poolMonitor.trackAirTemp(75.0, emptyObj)
 
 	// Third call with different temp - should log change
-	poolMonitor.trackAirTemp(76.0)
+	poolMonitor.trackAirTemp(76.0, emptyObj)
 	if poolMonitor.previousState.AirTemp != 76.0 {
 		t.Errorf("Expected air temp 76.0, got %v", poolMonitor.previousState.AirTemp)
 	}
@@ -2180,9 +2183,10 @@ func TestTrackAirTempInListenMode(t *testing.T) {
 
 func TestTrackPumpRPMInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", true)
+	emptyObj := ObjectData{}
 
 	// First call - should detect new pump
-	poolMonitor.trackPumpRPM("Pool Pump", 2400)
+	poolMonitor.trackPumpRPM("Pool Pump", 2400, emptyObj)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
@@ -2193,7 +2197,7 @@ func TestTrackPumpRPMInListenMode(t *testing.T) {
 	}
 
 	// Second call with changed RPM - should log change
-	poolMonitor.trackPumpRPM("Pool Pump", 2600)
+	poolMonitor.trackPumpRPM("Pool Pump", 2600, emptyObj)
 	if poolMonitor.previousState.PumpRPMs["Pool Pump"] != 2600 {
 		t.Errorf("Expected Pool Pump RPM 2600, got %v", poolMonitor.previousState.PumpRPMs["Pool Pump"])
 	}
@@ -2201,9 +2205,10 @@ func TestTrackPumpRPMInListenMode(t *testing.T) {
 
 func TestTrackCircuitInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", true)
+	emptyObj := ObjectData{}
 
 	// First call - should detect new circuit
-	poolMonitor.trackCircuit("Pool Light", testStatusOff)
+	poolMonitor.trackCircuit("Pool Light", testStatusOff, emptyObj)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
@@ -2214,7 +2219,7 @@ func TestTrackCircuitInListenMode(t *testing.T) {
 	}
 
 	// Second call with changed status - should log change
-	poolMonitor.trackCircuit("Pool Light", testStatusOn)
+	poolMonitor.trackCircuit("Pool Light", testStatusOn, emptyObj)
 	if poolMonitor.previousState.Circuits["Pool Light"] != testStatusOn {
 		t.Errorf("Expected Pool Light status ON, got %v", poolMonitor.previousState.Circuits["Pool Light"])
 	}
@@ -2222,9 +2227,10 @@ func TestTrackCircuitInListenMode(t *testing.T) {
 
 func TestTrackThermalInListenMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", true)
+	emptyObj := ObjectData{}
 
 	// First call - should detect new thermal equipment
-	poolMonitor.trackThermal("Pool Heater", thermalStatusOff)
+	poolMonitor.trackThermal("Pool Heater", thermalStatusOff, emptyObj)
 
 	if poolMonitor.previousState == nil {
 		t.Error("previousState should be initialized")
@@ -2235,7 +2241,7 @@ func TestTrackThermalInListenMode(t *testing.T) {
 	}
 
 	// Second call with changed status - should log change
-	poolMonitor.trackThermal("Pool Heater", thermalStatusHeating)
+	poolMonitor.trackThermal("Pool Heater", thermalStatusHeating, emptyObj)
 	if poolMonitor.previousState.Thermals["Pool Heater"] != thermalStatusHeating {
 		t.Errorf("Expected Pool Heater status heating, got %v", poolMonitor.previousState.Thermals["Pool Heater"])
 	}
@@ -2837,9 +2843,9 @@ func TestListenModeIntegration(t *testing.T) {
 	defer poolMonitor.Close()
 
 	// First call - should detect all equipment
-	err := poolMonitor.GetTemperatures(ctx)
+	err := poolMonitor.GetAllEquipmentStatus(ctx)
 	if err != nil {
-		t.Fatalf("First GetTemperatures failed: %v", err)
+		t.Fatalf("First GetAllEquipmentStatus failed: %v", err)
 	}
 
 	// Verify state was tracked
@@ -2870,9 +2876,9 @@ func TestListenModeIntegration(t *testing.T) {
 	}
 
 	// Second call - should not log anything (no changes)
-	err = poolMonitor.GetTemperatures(ctx)
+	err = poolMonitor.GetAllEquipmentStatus(ctx)
 	if err != nil {
-		t.Fatalf("Second GetTemperatures failed: %v", err)
+		t.Fatalf("Second GetAllEquipmentStatus failed: %v", err)
 	}
 }
 
@@ -3394,17 +3400,17 @@ func TestConvertToObjectData(t *testing.T) {
 	}
 }
 
-func TestLogRawMessage(_ *testing.T) {
+func TestLogRawPushMessage(_ *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 
 	// Test with valid message - should not panic
-	poolMonitor.logRawMessage(map[string]interface{}{
+	poolMonitor.logRawPushMessage(map[string]interface{}{
 		"command": "test",
 		"data":    "value",
 	})
 
 	// Test with empty message - should not panic
-	poolMonitor.logRawMessage(map[string]interface{}{})
+	poolMonitor.logRawPushMessage(map[string]interface{}{})
 }
 
 func TestHandleBodyPush(_ *testing.T) {

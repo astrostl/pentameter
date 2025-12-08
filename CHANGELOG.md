@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2025-12-07
+
+### Added
+- **Raw JSON output in listen mode** - All PUSH and POLL events now include the raw JSON message alongside human-readable summaries for debugging and integration purposes
+- New `outputRawJSON` and `outputRawObjectData` helper functions for consistent JSON logging
+- Generic `trackNumericValue` helper function to reduce code duplication in temperature and RPM tracking
+
+### Changed
+- Renamed `GetTemperatures` to `GetAllEquipmentStatus` to better reflect its comprehensive functionality
+- Updated `--listen` flag description to mention raw JSON output capability
+- Renamed `logRawMessage` to `logRawPushMessage` for clarity
+- Refactored tracking functions (`trackWaterTemp`, `trackAirTemp`, `trackPumpRPM`, `trackCircuit`, `trackThermal`) to output raw JSON on detection and change events
+
+### Code Quality
+- Reduced code duplication in numeric value tracking through generic helper function
+- Improved test coverage for renamed functions and new JSON output functionality
+
 ## [0.4.2] - 2025-12-01
 
 ### Changed

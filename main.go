@@ -217,7 +217,7 @@ type PoolMonitor struct {
 	failureThreshold       int        // Number of failures before attempting re-discovery
 	mu                     sync.Mutex // Protects concurrent access in listen mode
 	connected              bool
-	listenMode             bool // Enable live event logging mode
+	listenMode             bool // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool // Track if freeze protection is currently active
 	inRediscoveryMode      bool // Currently attempting re-discovery
@@ -447,16 +447,18 @@ func (pm *PoolMonitor) logGenericPushNotification(_ map[string]interface{}) {
 // StartEventListener runs a hybrid listen mode.
 // It listens for real-time push notifications AND polls periodically to catch
 // equipment types that IntelliCenter doesn't push (like pump RPM changes).
+// Outputs both human-readable summaries and raw JSON for all messages.
 func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time.Duration) {
 	// Initialize state tracking
 	pm.initializeState()
 
 	// Do one initial poll to establish baseline state
 	log.Println("Fetching initial equipment state...")
-	if err := pm.GetTemperatures(ctx); err != nil {
+	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
 		log.Printf("Warning: initial state fetch failed: %v", err)
 	}
 	pm.initialPollDone = true
+
 	log.Println("Listening for real-time changes (Ctrl+C to stop)...")
 
 	// Create a separate poller with its own connection
@@ -505,7 +507,7 @@ func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interv
 		case <-ticker.C:
 			pm.mu.Lock()
 			pm.previousState.PollChangeCount = 0
-			err := poller.GetTemperatures(ctx)
+			err := poller.GetAllEquipmentStatus(ctx)
 			changes := pm.previousState.PollChangeCount
 			pm.mu.Unlock()
 			if err != nil {
@@ -542,7 +544,7 @@ func (pm *PoolMonitor) listenLoop(ctx context.Context) {
 					pm.previousState = nil
 					pm.initializeState()
 					log.Println("Reconnected - fetching full equipment state...")
-					if err := pm.GetTemperatures(ctx); err != nil {
+					if err := pm.GetAllEquipmentStatus(ctx); err != nil {
 						log.Printf("Warning: state fetch failed: %v", err)
 					}
 					pm.initialPollDone = true
@@ -552,10 +554,32 @@ func (pm *PoolMonitor) listenLoop(ctx context.Context) {
 			}
 
 			pm.mu.Lock()
+			// Process push notifications for pretty output
 			pm.processRawPushNotification(rawMsg)
+			// Also output the raw JSON
+			pm.outputRawJSON("PUSH", rawMsg)
 			pm.mu.Unlock()
 		}
 	}
+}
+
+// outputRawJSON outputs the raw JSON message to the log with a prefix.
+func (pm *PoolMonitor) outputRawJSON(prefix string, msg map[string]interface{}) {
+	jsonBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("%s: [marshal error: %v]", prefix, err)
+		return
+	}
+	log.Printf("%s: %s", prefix, string(jsonBytes))
+}
+
+// outputRawObjectData outputs ObjectData as raw JSON for polling context.
+func (pm *PoolMonitor) outputRawObjectData(obj ObjectData) {
+	objMap := map[string]interface{}{
+		"objnam": obj.ObjName,
+		"params": obj.Params,
+	}
+	pm.outputRawJSON("POLL", objMap)
 }
 
 // processRawPushNotification handles raw JSON push notifications.
@@ -563,7 +587,7 @@ func (pm *PoolMonitor) listenLoop(ctx context.Context) {
 func (pm *PoolMonitor) processRawPushNotification(msg map[string]interface{}) {
 	objectList, ok := msg["objectList"].([]interface{})
 	if !ok || len(objectList) == 0 {
-		pm.logRawMessage(msg)
+		pm.logRawPushMessage(msg)
 		return
 	}
 
@@ -572,13 +596,13 @@ func (pm *PoolMonitor) processRawPushNotification(msg map[string]interface{}) {
 	}
 }
 
-func (pm *PoolMonitor) logRawMessage(msg map[string]interface{}) {
+func (pm *PoolMonitor) logRawPushMessage(msg map[string]interface{}) {
 	jsonBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("RAW: [marshal error: %v]", err)
+		log.Printf("PUSH: [marshal error: %v]", err)
 		return
 	}
-	log.Printf("RAW: %s", string(jsonBytes))
+	log.Printf("PUSH: %s", string(jsonBytes))
 }
 
 func (pm *PoolMonitor) processObjectListItem(item interface{}) {
@@ -589,7 +613,7 @@ func (pm *PoolMonitor) processObjectListItem(item interface{}) {
 
 	changes, ok := itemMap["changes"].([]interface{})
 	if !ok {
-		pm.logRawMessage(itemMap)
+		pm.logRawPushMessage(itemMap)
 		return
 	}
 
@@ -704,7 +728,7 @@ func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
 	log.Printf("PUSH: unknown %s: %s", obj.ObjName, string(jsonBytes))
 }
 
-func (pm *PoolMonitor) GetTemperatures(_ context.Context) error {
+func (pm *PoolMonitor) GetAllEquipmentStatus(_ context.Context) error {
 	if pm.conn == nil {
 		return fmt.Errorf("not connected to IntelliCenter")
 	}
@@ -826,12 +850,12 @@ func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[s
 	lotmpStr := obj.Params["LOTMP"]
 	hitmpStr := obj.Params["HITMP"]
 
-	pm.processBodyTemperature(name, tempStr, subtype, status)
+	pm.processBodyTemperature(name, tempStr, subtype, status, obj)
 	pm.processBodyHeatingStatus(name, htmodeStr, obj.ObjName)
 	pm.processHeaterAssignment(name, tempStr, htmodeStr, htsrc, lotmpStr, hitmpStr, obj.ObjName, referencedHeaters)
 }
 
-func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status string) {
+func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status string, obj ObjectData) {
 	if tempStr == "" || name == "" {
 		return
 	}
@@ -853,7 +877,7 @@ func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status str
 
 	// Store temperature in Fahrenheit as per project standard
 	poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
-	pm.trackWaterTemp(name, tempFahrenheit)
+	pm.trackWaterTemp(name, tempFahrenheit, obj)
 	pm.logIfNotListeningf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 }
 
@@ -954,7 +978,7 @@ func (pm *PoolMonitor) getAirTemperature() error {
 
 			// Store temperature in Fahrenheit as per project standard
 			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
-			pm.trackAirTemp(tempFahrenheit)
+			pm.trackAirTemp(tempFahrenheit, obj)
 			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 	}
@@ -1104,7 +1128,7 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 	} else if pm.isValidCircuit(obj.ObjName, name, subtype) {
 		statusValue := pm.calculateCircuitStatusValue(name, status, obj.ObjName, freezeEnabled)
 		circuitStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
-		pm.trackCircuit(name, status)
+		pm.trackCircuit(name, status, obj)
 	}
 }
 
@@ -1348,7 +1372,7 @@ func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 
 	// Update Prometheus metric
 	thermalStatus.WithLabelValues(obj.ObjName, name, subtype).Set(float64(heaterStatusValue))
-	pm.trackThermal(name, heaterStatusValue)
+	pm.trackThermal(name, heaterStatusValue, obj)
 
 	// Handle temperature setpoints
 	pm.updateThermalSetpoints(obj.ObjName, name, subtype, isReferenced, &bodyInfo, heaterStatusValue)
@@ -1488,7 +1512,7 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 	}
 
 	pumpRPM.WithLabelValues(obj.ObjName, name).Set(rpm)
-	pm.trackPumpRPM(name, rpm)
+	pm.trackPumpRPM(name, rpm, obj)
 	pm.logPumpUpdate(name, obj.ObjName, rpm, status, responseTime)
 	return nil
 }
@@ -1562,8 +1586,8 @@ func (pm *PoolMonitor) performInitialPolling(ctx context.Context) {
 		return
 	}
 
-	if err := pm.GetTemperatures(ctx); err != nil {
-		log.Printf("Failed to get initial temperatures: %v", err)
+	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
+		log.Printf("Failed to get initial equipment status: %v", err)
 		return
 	}
 
@@ -1611,7 +1635,7 @@ func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
 		return
 	}
 
-	if err := pm.GetTemperatures(ctx); err != nil {
+	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
 		pm.handlePollingError(err)
 		return
 	}
@@ -1620,7 +1644,7 @@ func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
 }
 
 func (pm *PoolMonitor) handlePollingError(err error) {
-	log.Printf("Failed to get temperatures: %v", err)
+	log.Printf("Failed to get equipment status: %v", err)
 	if !pm.listenMode {
 		pm.connected = false
 	}
@@ -1781,27 +1805,42 @@ func (pm *PoolMonitor) logPollChangef(format string, args ...interface{}) {
 	pm.previousState.PollChangeCount++
 }
 
-func (pm *PoolMonitor) trackWaterTemp(name string, temp float64) {
+// trackNumericValue is a generic helper for tracking numeric values (temps, RPM).
+// It handles the common pattern of detect/change logging with raw JSON output.
+func (pm *PoolMonitor) trackNumericValue(
+	name string,
+	value float64,
+	obj ObjectData,
+	valueMap map[string]float64,
+	detectFmt string,
+	changeFmt string,
+) {
+	prev, exists := valueMap[name]
+	if !exists {
+		if !pm.initialPollDone {
+			log.Printf(detectFmt, name, value)
+			pm.outputRawObjectData(obj)
+		}
+	} else if prev != value {
+		pm.logPollChangef(changeFmt, name, prev, value)
+		pm.outputRawObjectData(obj)
+	}
+	valueMap[name] = value
+}
+
+func (pm *PoolMonitor) trackWaterTemp(name string, temp float64, obj ObjectData) {
 	if !pm.listenMode {
 		return
 	}
 	if pm.previousState == nil {
 		pm.initializeState()
 	}
-
-	prevTemp, exists := pm.previousState.WaterTemps[name]
-	if !exists {
-		// First time seeing this equipment - only log on initial poll
-		if !pm.initialPollDone {
-			log.Printf("POLL: %s temperature detected: %.1f°F", name, temp)
-		}
-	} else if prevTemp != temp {
-		pm.logPollChangef("%s temperature changed: %.1f°F → %.1f°F", name, prevTemp, temp)
-	}
-	pm.previousState.WaterTemps[name] = temp
+	pm.trackNumericValue(name, temp, obj, pm.previousState.WaterTemps,
+		"POLL: %s temperature detected: %.1f°F",
+		"%s temperature changed: %.1f°F → %.1f°F")
 }
 
-func (pm *PoolMonitor) trackAirTemp(temp float64) {
+func (pm *PoolMonitor) trackAirTemp(temp float64, obj ObjectData) {
 	if !pm.listenMode {
 		return
 	}
@@ -1813,34 +1852,28 @@ func (pm *PoolMonitor) trackAirTemp(temp float64) {
 		// First time seeing air temp - only log on initial poll
 		if !pm.initialPollDone {
 			log.Printf("POLL: Air temperature detected: %.1f°F", temp)
+			pm.outputRawObjectData(obj)
 		}
 	} else if pm.previousState.AirTemp != temp {
 		pm.logPollChangef("Air temperature changed: %.1f°F → %.1f°F", pm.previousState.AirTemp, temp)
+		pm.outputRawObjectData(obj)
 	}
 	pm.previousState.AirTemp = temp
 }
 
-func (pm *PoolMonitor) trackPumpRPM(name string, rpm float64) {
+func (pm *PoolMonitor) trackPumpRPM(name string, rpm float64, obj ObjectData) {
 	if !pm.listenMode {
 		return
 	}
 	if pm.previousState == nil {
 		pm.initializeState()
 	}
-
-	prevRPM, exists := pm.previousState.PumpRPMs[name]
-	if !exists {
-		// First time seeing this pump - only log on initial poll
-		if !pm.initialPollDone {
-			log.Printf("POLL: %s detected: %.0f RPM", name, rpm)
-		}
-	} else if prevRPM != rpm {
-		pm.logPollChangef("%s RPM changed: %.0f → %.0f", name, prevRPM, rpm)
-	}
-	pm.previousState.PumpRPMs[name] = rpm
+	pm.trackNumericValue(name, rpm, obj, pm.previousState.PumpRPMs,
+		"POLL: %s detected: %.0f RPM",
+		"%s RPM changed: %.0f → %.0f")
 }
 
-func (pm *PoolMonitor) trackCircuit(name, status string) {
+func (pm *PoolMonitor) trackCircuit(name, status string, obj ObjectData) {
 	if !pm.listenMode {
 		return
 	}
@@ -1853,14 +1886,16 @@ func (pm *PoolMonitor) trackCircuit(name, status string) {
 		// First time seeing this circuit - only log on initial poll
 		if !pm.initialPollDone {
 			log.Printf("POLL: %s detected: %s", name, status)
+			pm.outputRawObjectData(obj)
 		}
 	} else if prevStatus != status {
 		pm.logPollChangef("%s turned %s", name, status)
+		pm.outputRawObjectData(obj)
 	}
 	pm.previousState.Circuits[name] = status
 }
 
-func (pm *PoolMonitor) trackThermal(name string, status int) {
+func (pm *PoolMonitor) trackThermal(name string, status int, obj ObjectData) {
 	if !pm.listenMode {
 		return
 	}
@@ -1873,10 +1908,12 @@ func (pm *PoolMonitor) trackThermal(name string, status int) {
 		// First time seeing this thermal equipment - only log on initial poll
 		if !pm.initialPollDone {
 			log.Printf("POLL: %s detected: %s", name, pm.getStatusDescription(status))
+			pm.outputRawObjectData(obj)
 		}
 	} else if prevStatus != status {
 		pm.logPollChangef("%s status changed: %s → %s", name,
 			pm.getStatusDescription(prevStatus), pm.getStatusDescription(status))
+		pm.outputRawObjectData(obj)
 	}
 	pm.previousState.Thermals[name] = status
 }
@@ -2098,7 +2135,7 @@ func defineFlags() *commandLineFlags {
 		httpPort: flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"),
 			"HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)"),
 		listenMode: flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
-			"Enable live event logging mode (rapid polling, log changes only) (env: PENTAMETER_LISTEN)"),
+			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
