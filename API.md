@@ -1338,3 +1338,64 @@ IntelliBrite lights can be organized into light show groups (SUBTYP=LITSHO) for 
 - `MAGIC2`: MagicStream laminar jets
 - `CLRCASC`: ColorCascade lights
 - `LITSHO`: Light Show groups
+
+### ⚠️ Light Control Cascading Behavior (Gotcha)
+
+**Critical Discovery:** The "All Off" button in IntelliCenter's Light Management UI can cascade to turn off unrelated circuits, including body circuits (Spa/Pool).
+
+**Observed Behavior:**
+
+When using the web UI "All Off" button in the Lights management section:
+
+1. **Command Sent** (captured via WebSocket):
+```json
+{
+  "command": "SetParamList",
+  "messageID": "SET_LIGHT_STATUS_MESSAGE_ID_ALL_OFF...",
+  "objectList": [
+    {"objnam": "<light1>", "params": {"STATUS": "OFF"}},
+    {"objnam": "<light2>", "params": {"STATUS": "OFF"}},
+    {"objnam": "<light3>", "params": {"STATUS": "OFF"}}
+  ]
+}
+```
+
+2. **Expected Result:** Only the light circuits turn off.
+
+3. **Actual Result:** IntelliCenter also sends NotifyList messages turning off:
+   - Body objects (e.g., Spa body)
+   - Body-associated circuits (e.g., Spa circuit)
+   - Pump status changes
+
+**Example NotifyList Cascade:**
+```
+NotifyList: <light1> STATUS=OFF     (expected)
+NotifyList: <light2> STATUS=OFF     (expected)
+NotifyList: <light3> STATUS=OFF     (expected)
+NotifyList: <body> STATUS=OFF       (UNEXPECTED - body turned off!)
+NotifyList: <pump> CIRCUIT="00000"  (UNEXPECTED - pump disassociated)
+NotifyList: <spa-circuit> STATUS=OFF (UNEXPECTED - spa turned off!)
+```
+
+**Cause:**
+
+IntelliCenter has internal logic linking certain lights to their associated bodies. When a body-associated light (e.g., Spa Light) is turned off via the bulk "All Lights Off" command, the system cascades to deactivate the entire body and its primary circuit.
+
+This cascade is triggered by IntelliCenter firmware, not by the web UI - the UI only sends light-off commands.
+
+**Implications for API Users:**
+
+- **Avoid bulk light-off commands** if you want to preserve body (Spa/Pool) operation
+- **Turn off lights individually** to prevent cascade effects
+- **Monitor NotifyList messages** for unexpected circuit changes when controlling lights
+- **The web UI "All Off" button affects more than just lights**
+
+**Safe Individual Light Control:**
+```json
+{
+  "command": "SetParamList",
+  "objectList": [{"objnam": "<light-circuit>", "params": {"STATUS": "OFF"}}]
+}
+```
+
+Individual circuit commands do not appear to trigger the same cascade behavior.
