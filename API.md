@@ -1201,14 +1201,14 @@ This behavior:
 
 ### IntelliBrite Color-Changing Lights
 
-IntelliCenter supports IntelliBrite (SUBTYP=INTELLI) color-changing LED pool lights with fixed colors and animated light shows. Colors and shows are controlled via the `USE` parameter.
+IntelliCenter supports IntelliBrite (SUBTYP=INTELLI) color-changing LED pool lights with fixed colors and animated light shows.
 
 **Query IntelliBrite Circuit:**
 ```json
 {
   "messageID": "intellibrite-001",
   "command": "GetParamList",
-  "objectList": [{"objnam": "C0007", "keys": ["SNAME", "STATUS", "SUBTYP", "USE", "USAGE"]}]
+  "objectList": [{"objnam": "C0007", "keys": ["SNAME", "STATUS", "SUBTYP", "USE", "ACT"]}]
 }
 ```
 
@@ -1221,15 +1221,43 @@ IntelliCenter supports IntelliBrite (SUBTYP=INTELLI) color-changing LED pool lig
     "STATUS": "ON",
     "SUBTYP": "INTELLI",
     "USE": "BLUER",
-    "USAGE": "shdyMbaSowglTeQ"
+    "ACT": "65535"
   }
 }
 ```
 
 **Key Parameters:**
-- **USE**: Current color or light show mode (see tables below)
+- **ACT**: Write-only trigger to change color/show (set this to change the light)
+- **USE**: Read-only storage of current color or light show mode (see tables below)
 - **USAGE**: Encoded capability mask indicating available options for this circuit type
 - **SUBTYP**: `INTELLI` for IntelliBrite lights
+
+#### Setting vs Reading Colors
+
+| Parameter | Purpose | Behavior |
+|-----------|---------|----------|
+| **ACT** | Trigger color changes (write) | Set to desired color code; returns to "65535" after processing |
+| **USE** | Stores selected color (read) | Persists the current selection; setting directly returns 404 |
+
+- **To change color**: Set the `ACT` parameter to the desired color/show code
+- **To read current color**: Read the `USE` parameter
+- When `ACT` = "65535", the light is in fixed color mode and the actual color is in `USE`
+
+**Change Light Color Example:**
+```json
+{
+  "messageID": "set-color",
+  "command": "SetParamList",
+  "objectList": [{"objnam": "C0007", "params": {"ACT": "BLUER"}}]
+}
+```
+
+**Response:**
+```json
+{"command": "SetParamList", "messageID": "set-color", "response": "200"}
+```
+
+After this command, querying the circuit will show `USE: "BLUER"` and `ACT: "65535"`.
 
 #### Fixed Colors (5)
 
