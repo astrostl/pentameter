@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2025-12-13
+
+### Added
+- **Automatic cleanup of stale Prometheus metrics** - When circuits or features are removed from IntelliCenter configuration, their metrics are automatically cleaned up on the next poll cycle
+- New `cleanupStaleMetrics()` function for removing stale metric entries
+- Active circuit and feature key tracking maps for stale metric detection
+
+### Documentation
+- Document IntelliBrite module association theory for Spa cascade behavior (unconfirmed)
+- Document "All Lights Off" cascade behavior that turns off Spa
+- Document ACT vs USE parameters for IntelliBrite color control
+- Document freeze protection priority over user-selected pump speeds
+- Add guideline to use placeholder IPs in documentation (not real IPs)
+- Use environment variable instead of hardcoded IP in CLAUDE.md examples
+- Expand circuit status queries to include all circuits and features with freeze status
+- Document IntelliBrite color-changing light control in API.md
+
+### Code Quality
+- Added `metricKeyPartsCount` constant to eliminate magic numbers
+- Added 4 new tests for stale metric cleanup functionality
+- All 123 tests passing with comprehensive coverage
+
 ## [0.4.3] - 2025-12-07
 
 ### Added
