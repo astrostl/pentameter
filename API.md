@@ -1398,4 +1398,53 @@ This cascade is triggered by IntelliCenter firmware, not by the web UI - the UI 
 }
 ```
 
-Individual circuit commands do not appear to trigger the same cascade behavior.
+Individual circuit commands may still trigger cascade behavior in some cases - see "IntelliBrite Module Association Theory" below.
+
+### IntelliBrite Module Association Theory (Unconfirmed)
+
+**Observed Behavior:**
+
+Turning off an IntelliBrite circuit (SUBTYP=INTELLI) - either individually or via light group - can intermittently cascade to turn off an unrelated Spa circuit and body, even when:
+- The IntelliBrite is the only member of its light group
+- The Spa's actual light circuit is NOT in the light group
+- The command is sent via the official IntelliCenter web app (not third-party)
+- The Spa is not actively heating
+
+**Example Cascade (from pentameter --listen):**
+```
+15:05:12 POLL: AUX 5 turned OFF           (IntelliBrite circuit)
+15:05:12 POLL: Spa turned OFF             (UNEXPECTED cascade)
+15:05:12 POLL: Light Group 1 turned OFF   (group followed its member)
+```
+
+**Module Configuration Observation:**
+
+| Object | Name | Type | Module |
+|--------|------|------|--------|
+| B1202 | Spa | BODY | M0102 |
+| C0001 | Spa | SPA circuit | M0102 |
+| C0007 | AUX 5 | INTELLI | M0102 |
+| C0004 | Spa Light | LIGHT | M0101 |
+
+The IntelliBrite circuit (C0007) shares the same parent module (M0102) as the Spa body (B1202). The actual Spa Light (C0004) is on a different module (M0101) and does NOT trigger cascade when turned off.
+
+**Theory:** IntelliCenter firmware may implicitly associate IntelliBrite circuits with the body on their same expansion module, regardless of circuit naming or explicit configuration.
+
+**Alternative Theories:**
+
+1. **No-Load Detection:** The IntelliBrite circuit has no physical light connected. IntelliBrite uses digital communication over power lines. The controller may detect no response and interpret this as a fault, triggering body shutdown.
+
+2. **Freeze Mode Interaction:** When freeze protection is active on Pool (causing freeze RPM on shared pump), turning off circuits on the Spa module may trigger unexpected firmware behavior.
+
+**Why Intermittent?**
+
+The cascade does not occur every time. This suggests either:
+- A race condition in IntelliCenter firmware
+- Additional state-dependent conditions not yet identified
+- Timing-sensitive behavior
+
+**Implications:**
+
+- This behavior occurs with the official IntelliCenter web app - it is firmware behavior, not a third-party integration issue
+- Configuring a circuit as IntelliBrite (SUBTYP=INTELLI) on a body's module may create implicit associations
+- There is no known API method to query or modify these implicit associations
