@@ -50,6 +50,9 @@ const (
 	// Maximum number of unsolicited messages to skip when waiting for a response.
 	maxUnsolicitedMessages = 10
 
+	// Metric key parts count (objnam|name|subtype).
+	metricKeyPartsCount = 3
+
 	// Read timeout for waiting for response (allows time to receive and skip push notifications).
 	responseReadTimeout = 30 * time.Second
 
@@ -208,6 +211,8 @@ type PoolMonitor struct {
 	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
 	circuitFreezeConfig    map[string]bool           // Track circuit objnam -> freeze protection enabled
 	circuitNames           map[string]string         // Track circuit/group objnam -> SNAME for display
+	activeCircuitKeys      map[string]bool           // Track active circuit metric keys for stale cleanup
+	activeFeatureKeys      map[string]bool           // Track active feature metric keys for stale cleanup
 	previousState          *EquipmentState           // Previous state for change detection
 	intelliCenterURL       string
 	intelliCenterIP        string // Store IP separately for re-discovery
@@ -284,6 +289,8 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		featureConfig:          make(map[string]string),
 		circuitFreezeConfig:    make(map[string]bool),
 		circuitNames:           make(map[string]string),
+		activeCircuitKeys:      make(map[string]bool),
+		activeFeatureKeys:      make(map[string]bool),
 		previousState:          nil,
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
@@ -1062,12 +1069,39 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 		return err
 	}
 
+	// Save previous keys for stale metric cleanup
+	previousCircuitKeys := pm.activeCircuitKeys
+	previousFeatureKeys := pm.activeFeatureKeys
+	pm.activeCircuitKeys = make(map[string]bool)
+	pm.activeFeatureKeys = make(map[string]bool)
+
 	// Update Prometheus metrics
 	for _, obj := range resp.ObjectList {
 		pm.processCircuitObject(obj)
 	}
 
+	// Cleanup stale circuit metrics
+	pm.cleanupStaleMetrics(previousCircuitKeys, pm.activeCircuitKeys, circuitStatus, "circuit")
+
+	// Cleanup stale feature metrics
+	pm.cleanupStaleMetrics(previousFeatureKeys, pm.activeFeatureKeys, featureStatus, "feature")
+
 	return nil
+}
+
+func (pm *PoolMonitor) cleanupStaleMetrics(previous, current map[string]bool, metric *prometheus.GaugeVec, metricType string) {
+	for key := range previous {
+		if !current[key] {
+			// Parse the key back into label values (format: "objnam|name|subtype")
+			parts := strings.SplitN(key, "|", metricKeyPartsCount)
+			if len(parts) == metricKeyPartsCount {
+				deleted := metric.DeleteLabelValues(parts[0], parts[1], parts[2])
+				if deleted {
+					log.Printf("Cleaned up stale %s metric: %s (%s)", metricType, parts[1], parts[0])
+				}
+			}
+		}
+	}
 }
 
 func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
@@ -1128,6 +1162,7 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 	} else if pm.isValidCircuit(obj.ObjName, name, subtype) {
 		statusValue := pm.calculateCircuitStatusValue(name, status, obj.ObjName, freezeEnabled)
 		circuitStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
+		pm.activeCircuitKeys[obj.ObjName+"|"+name+"|"+subtype] = true
 		pm.trackCircuit(name, status, obj)
 	}
 }
@@ -1185,6 +1220,7 @@ func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subty
 
 	// Update Prometheus metric using IntelliCenter's SUBTYP
 	featureStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
+	pm.activeFeatureKeys[obj.ObjName+"|"+name+"|"+subtype] = true
 	pm.trackFeature(name, status)
 
 	pm.logIfNotListeningf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, statusDesc, statusValue)

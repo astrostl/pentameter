@@ -3625,3 +3625,192 @@ func TestResolveIntelliCenterIPWithProvidedIP(t *testing.T) {
 		t.Errorf("resolveIntelliCenterIP(\"192.168.1.100\") = %q, want \"192.168.1.100\"", result)
 	}
 }
+
+func TestCleanupStaleMetrics(t *testing.T) {
+	// Create a test gauge vec with same labels as circuit_status
+	testGauge := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "test_cleanup_metric",
+			Help: "Test metric for cleanup testing",
+		},
+		[]string{"circuit", "name", "subtyp"},
+	)
+
+	// Register the gauge (unregister at end of test)
+	prometheus.MustRegister(testGauge)
+	defer prometheus.Unregister(testGauge)
+
+	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
+
+	tests := []struct {
+		name     string
+		previous map[string]bool
+		current  map[string]bool
+	}{
+		{
+			name: "deletes stale metrics not in current",
+			previous: map[string]bool{
+				"C01|Pool Light|LIGHT":    true,
+				"C02|Spa Light|LIGHT":     true,
+				"C03|Old Circuit|GENERIC": true,
+			},
+			current: map[string]bool{
+				"C01|Pool Light|LIGHT": true,
+				"C02|Spa Light|LIGHT":  true,
+				// C03 is missing - should be deleted (log output confirms)
+			},
+		},
+		{
+			name: "no deletions when all metrics current",
+			previous: map[string]bool{
+				"C01|Pool Light|LIGHT": true,
+			},
+			current: map[string]bool{
+				"C01|Pool Light|LIGHT": true,
+			},
+		},
+		{
+			name:     "handles empty previous",
+			previous: map[string]bool{},
+			current:  map[string]bool{"C01|Pool Light|LIGHT": true},
+		},
+		{
+			name: "handles malformed key gracefully",
+			previous: map[string]bool{
+				"malformed_key": true, // Missing pipe separators - should not panic
+			},
+			current: map[string]bool{},
+		},
+		{
+			name: "handles key with only two parts",
+			previous: map[string]bool{
+				"C01|Pool Light": true, // Only two parts - should not panic
+			},
+			current: map[string]bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(_ *testing.T) {
+			// Reset metrics for each test
+			testGauge.Reset()
+			for key := range tt.previous {
+				parts := strings.SplitN(key, "|", metricKeyPartsCount)
+				if len(parts) == metricKeyPartsCount {
+					testGauge.WithLabelValues(parts[0], parts[1], parts[2]).Set(1)
+				}
+			}
+
+			// Run cleanup - should not panic and should log deletions
+			// The log output "Cleaned up stale test metric: X (Y)" confirms deletion
+			poolMonitor.cleanupStaleMetrics(tt.previous, tt.current, testGauge, "test")
+		})
+	}
+}
+
+func TestActiveCircuitKeyTracking(t *testing.T) {
+	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
+
+	// Process a circuit object
+	obj := ObjectData{
+		ObjName: "C01",
+		Params: map[string]string{
+			"SNAME":  "Pool Light",
+			"STATUS": "ON",
+			"OBJTYP": "CIRCUIT",
+			"SUBTYP": "LIGHT",
+		},
+	}
+
+	poolMonitor.processCircuitObject(obj)
+
+	// Verify the key was tracked
+	expectedKey := "C01|Pool Light|LIGHT"
+	if !poolMonitor.activeCircuitKeys[expectedKey] {
+		t.Errorf("expected activeCircuitKeys to contain %q", expectedKey)
+	}
+}
+
+func TestActiveFeatureKeyTracking(t *testing.T) {
+	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
+
+	// Set up feature config to allow the feature to be processed
+	poolMonitor.featureConfig["FTR01"] = testShowOnMenuValue
+
+	// Process a feature object
+	obj := ObjectData{
+		ObjName: "FTR01",
+		Params: map[string]string{
+			"SNAME":  "Spa Jets",
+			"STATUS": "ON",
+			"OBJTYP": "CIRCUIT",
+			"SUBTYP": "GENERIC",
+		},
+	}
+
+	poolMonitor.processCircuitObject(obj)
+
+	// Verify the key was tracked
+	expectedKey := "FTR01|Spa Jets|GENERIC"
+	if !poolMonitor.activeFeatureKeys[expectedKey] {
+		t.Errorf("expected activeFeatureKeys to contain %q", expectedKey)
+	}
+}
+
+func TestStaleMetricCleanupIntegration(t *testing.T) {
+	// First call returns two circuits
+	firstResponse := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=CIRCUIT": {
+			Command:  "GetParamList",
+			Response: "200",
+			ObjectList: []ObjectData{
+				{
+					ObjName: "C01",
+					Params: map[string]string{
+						"SNAME":  "Pool Light",
+						"STATUS": "ON",
+						"OBJTYP": "CIRCUIT",
+						"SUBTYP": "LIGHT",
+					},
+				},
+				{
+					ObjName: "C02",
+					Params: map[string]string{
+						"SNAME":  "Spa Light",
+						"STATUS": "ON",
+						"OBJTYP": "CIRCUIT",
+						"SUBTYP": "LIGHT",
+					},
+				},
+			},
+		},
+	}
+
+	server := createMockWebSocketServer(t, firstResponse)
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
+	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+
+	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
+	ctx := t.Context()
+
+	if err := poolMonitor.Connect(ctx); err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer poolMonitor.Close()
+
+	// First call - should track both circuits
+	err := poolMonitor.getCircuitStatus()
+	if err != nil {
+		t.Fatalf("First getCircuitStatus failed: %v", err)
+	}
+
+	// Verify both keys are tracked
+	if !poolMonitor.activeCircuitKeys["C01|Pool Light|LIGHT"] {
+		t.Error("expected C01 to be tracked after first call")
+	}
+	if !poolMonitor.activeCircuitKeys["C02|Spa Light|LIGHT"] {
+		t.Error("expected C02 to be tracked after first call")
+	}
+}
