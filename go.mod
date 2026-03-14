@@ -1,11 +1,11 @@
 module github.com/astrostl/pentameter
 
-go 1.24.4
+go 1.25.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.51.0
 )
 
 require (
