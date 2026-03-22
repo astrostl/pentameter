@@ -12,9 +12,20 @@ import (
 
 const (
 	pentameterHostname = "pentameter.local."
-	serviceName        = "_pentameter._tcp.local."
-	instanceName       = "pentameter._pentameter._tcp.local."
 	mdnsTTL            = 120 // seconds
+
+	// DNS-SD service type enumeration (RFC 6763 §9)
+	dnsSDServiceName = "_services._dns-sd._udp.local."
+
+	// Service types we advertise under
+	pentameterServiceName = "_pentameter._tcp.local."
+	httpServiceName       = "_http._tcp.local."
+	promHTTPServiceName   = "_prometheus-http._tcp.local."
+
+	// Instance names for each service type
+	pentameterInstanceName = "pentameter._pentameter._tcp.local."
+	httpInstanceName       = "pentameter._http._tcp.local."
+	promHTTPInstanceName   = "pentameter._prometheus-http._tcp.local."
 )
 
 // MDNSAdvertiser responds to mDNS queries for pentameter's service.
@@ -135,47 +146,68 @@ func (a *MDNSAdvertiser) handleQuery(data []byte, remoteAddr net.Addr, verbose b
 	}
 
 	for i := range msg.Questions {
-		response := a.buildResponse(&msg.Questions[i])
-		if response == nil {
-			continue
-		}
-
-		packed, err := response.Pack()
-		if err != nil {
-			if verbose {
-				log.Printf("mDNS advertise: failed to pack response: %v", err)
+		responses := a.buildResponses(&msg.Questions[i])
+		for _, response := range responses {
+			packed, err := response.Pack()
+			if err != nil {
+				if verbose {
+					log.Printf("mDNS advertise: failed to pack response: %v", err)
+				}
+				continue
 			}
-			continue
-		}
 
-		if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil {
-			if verbose {
-				log.Printf("mDNS advertise: failed to send response: %v", err)
+			if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil {
+				if verbose {
+					log.Printf("mDNS advertise: failed to send response: %v", err)
+				}
 			}
 		}
 	}
 }
 
-// buildResponse creates an mDNS response for a matching query, or nil if no match.
-func (a *MDNSAdvertiser) buildResponse(question *dnsmessage.Question) *dnsmessage.Message {
+// serviceType groups the DNS names for a single mDNS service registration.
+type serviceType struct {
+	service  string // e.g. "_http._tcp.local."
+	instance string // e.g. "pentameter._http._tcp.local."
+}
+
+// allServiceTypes returns all service types we advertise.
+func allServiceTypes() []serviceType {
+	return []serviceType{
+		{pentameterServiceName, pentameterInstanceName},
+		{httpServiceName, httpInstanceName},
+		{promHTTPServiceName, promHTTPInstanceName},
+	}
+}
+
+// buildResponses creates mDNS responses for a matching query. Returns nil if no match.
+func (a *MDNSAdvertiser) buildResponses(question *dnsmessage.Question) []*dnsmessage.Message {
 	qName := strings.ToLower(question.Name.String())
 
-	switch {
-	case qName == strings.ToLower(pentameterHostname) && question.Type == dnsmessage.TypeA:
-		return a.buildAResponse(question.Name)
-
-	case qName == strings.ToLower(serviceName) && question.Type == dnsmessage.TypePTR:
-		return a.buildPTRResponse()
-
-	case qName == strings.ToLower(instanceName) && question.Type == dnsmessage.TypeSRV:
-		return a.buildSRVResponse()
-
-	case qName == strings.ToLower(instanceName) && question.Type == dnsmessage.TypeTXT:
-		return a.buildTXTResponse()
-
-	default:
-		return nil
+	// A record for pentameter.local
+	if qName == strings.ToLower(pentameterHostname) && question.Type == dnsmessage.TypeA {
+		return []*dnsmessage.Message{a.buildAResponse(question.Name)}
 	}
+
+	// DNS-SD service type enumeration (RFC 6763 §9)
+	if qName == strings.ToLower(dnsSDServiceName) && question.Type == dnsmessage.TypePTR {
+		return a.buildServiceEnumResponses()
+	}
+
+	// Check each service type for PTR/SRV/TXT queries
+	for _, svc := range allServiceTypes() {
+		if qName == strings.ToLower(svc.service) && question.Type == dnsmessage.TypePTR {
+			return []*dnsmessage.Message{a.buildPTRResponse(svc.service, svc.instance)}
+		}
+		if qName == strings.ToLower(svc.instance) && question.Type == dnsmessage.TypeSRV {
+			return []*dnsmessage.Message{a.buildSRVResponse(svc.instance)}
+		}
+		if qName == strings.ToLower(svc.instance) && question.Type == dnsmessage.TypeTXT {
+			return []*dnsmessage.Message{a.buildTXTResponse(svc.instance)}
+		}
+	}
+
+	return nil
 }
 
 // buildAResponse creates a response with the A record for pentameter.local.
@@ -200,8 +232,34 @@ func (a *MDNSAdvertiser) buildAResponse(name dnsmessage.Name) *dnsmessage.Messag
 	}
 }
 
+// buildServiceEnumResponses creates PTR responses for DNS-SD service type enumeration (RFC 6763 §9).
+// Returns one response per service type so browsers can discover all advertised services.
+func (a *MDNSAdvertiser) buildServiceEnumResponses() []*dnsmessage.Message {
+	var responses []*dnsmessage.Message
+	for _, svc := range allServiceTypes() {
+		responses = append(responses, &dnsmessage.Message{
+			Header: dnsmessage.Header{
+				Response:      true,
+				Authoritative: true,
+			},
+			Answers: []dnsmessage.Resource{{
+				Header: dnsmessage.ResourceHeader{
+					Name:  dnsmessage.MustNewName(dnsSDServiceName),
+					Type:  dnsmessage.TypePTR,
+					Class: dnsmessage.ClassINET,
+					TTL:   mdnsTTL,
+				},
+				Body: &dnsmessage.PTRResource{
+					PTR: dnsmessage.MustNewName(svc.service),
+				},
+			}},
+		})
+	}
+	return responses
+}
+
 // buildPTRResponse creates a PTR response pointing to the service instance.
-func (a *MDNSAdvertiser) buildPTRResponse() *dnsmessage.Message {
+func (a *MDNSAdvertiser) buildPTRResponse(service, instance string) *dnsmessage.Message {
 	return &dnsmessage.Message{
 		Header: dnsmessage.Header{
 			Response:      true,
@@ -209,20 +267,20 @@ func (a *MDNSAdvertiser) buildPTRResponse() *dnsmessage.Message {
 		},
 		Answers: []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(serviceName),
+				Name:  dnsmessage.MustNewName(service),
 				Type:  dnsmessage.TypePTR,
 				Class: dnsmessage.ClassINET,
 				TTL:   mdnsTTL,
 			},
 			Body: &dnsmessage.PTRResource{
-				PTR: dnsmessage.MustNewName(instanceName),
+				PTR: dnsmessage.MustNewName(instance),
 			},
 		}},
 	}
 }
 
 // buildSRVResponse creates an SRV response with host and port.
-func (a *MDNSAdvertiser) buildSRVResponse() *dnsmessage.Message {
+func (a *MDNSAdvertiser) buildSRVResponse(instance string) *dnsmessage.Message {
 	var aRecord [4]byte
 	copy(aRecord[:], a.ip.To4())
 
@@ -233,7 +291,7 @@ func (a *MDNSAdvertiser) buildSRVResponse() *dnsmessage.Message {
 		},
 		Answers: []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(instanceName),
+				Name:  dnsmessage.MustNewName(instance),
 				Type:  dnsmessage.TypeSRV,
 				Class: dnsmessage.ClassINET,
 				TTL:   mdnsTTL,
@@ -258,7 +316,7 @@ func (a *MDNSAdvertiser) buildSRVResponse() *dnsmessage.Message {
 }
 
 // buildTXTResponse creates a TXT response with service metadata.
-func (a *MDNSAdvertiser) buildTXTResponse() *dnsmessage.Message {
+func (a *MDNSAdvertiser) buildTXTResponse(instance string) *dnsmessage.Message {
 	return &dnsmessage.Message{
 		Header: dnsmessage.Header{
 			Response:      true,
@@ -266,7 +324,7 @@ func (a *MDNSAdvertiser) buildTXTResponse() *dnsmessage.Message {
 		},
 		Answers: []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
-				Name:  dnsmessage.MustNewName(instanceName),
+				Name:  dnsmessage.MustNewName(instance),
 				Type:  dnsmessage.TypeTXT,
 				Class: dnsmessage.ClassINET,
 				TTL:   mdnsTTL,

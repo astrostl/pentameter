@@ -44,7 +44,7 @@ func TestBuildAResponse(t *testing.T) {
 
 func TestBuildPTRResponse(t *testing.T) {
 	adv := newTestAdvertiser()
-	resp := adv.buildPTRResponse()
+	resp := adv.buildPTRResponse(pentameterServiceName, pentameterInstanceName)
 
 	if resp == nil {
 		t.Fatal("expected non-nil response")
@@ -57,14 +57,14 @@ func TestBuildPTRResponse(t *testing.T) {
 	if !ok {
 		t.Fatal("expected PTRResource body")
 	}
-	if ptr.PTR.String() != instanceName {
-		t.Errorf("expected PTR target %s, got %s", instanceName, ptr.PTR.String())
+	if ptr.PTR.String() != pentameterInstanceName {
+		t.Errorf("expected PTR target %s, got %s", pentameterInstanceName, ptr.PTR.String())
 	}
 }
 
 func TestBuildSRVResponse(t *testing.T) {
 	adv := newTestAdvertiser()
-	resp := adv.buildSRVResponse()
+	resp := adv.buildSRVResponse(pentameterInstanceName)
 
 	if resp == nil {
 		t.Fatal("expected non-nil response")
@@ -92,7 +92,7 @@ func TestBuildSRVResponse(t *testing.T) {
 
 func TestBuildTXTResponse(t *testing.T) {
 	adv := newTestAdvertiser()
-	resp := adv.buildTXTResponse()
+	resp := adv.buildTXTResponse(pentameterInstanceName)
 
 	if resp == nil {
 		t.Fatal("expected non-nil response")
@@ -113,43 +113,117 @@ func TestBuildTXTResponse(t *testing.T) {
 	}
 }
 
-func TestBuildResponseMatching(t *testing.T) {
+func TestBuildServiceEnumResponses(t *testing.T) {
+	adv := newTestAdvertiser()
+	responses := adv.buildServiceEnumResponses()
+
+	services := allServiceTypes()
+	if len(responses) != len(services) {
+		t.Fatalf("expected %d responses, got %d", len(services), len(responses))
+	}
+
+	for i, resp := range responses {
+		if !resp.Header.Response {
+			t.Errorf("response %d: expected response flag", i)
+		}
+		if !resp.Header.Authoritative {
+			t.Errorf("response %d: expected authoritative flag", i)
+		}
+		if len(resp.Answers) != 1 {
+			t.Errorf("response %d: expected 1 answer, got %d", i, len(resp.Answers))
+			continue
+		}
+		ptr, ok := resp.Answers[0].Body.(*dnsmessage.PTRResource)
+		if !ok {
+			t.Errorf("response %d: expected PTRResource body", i)
+			continue
+		}
+		if ptr.PTR.String() != services[i].service {
+			t.Errorf("response %d: expected PTR target %s, got %s", i, services[i].service, ptr.PTR.String())
+		}
+	}
+}
+
+func TestBuildResponsesMatching(t *testing.T) {
 	adv := newTestAdvertiser()
 
 	tests := []struct {
-		name     string
-		qName    string
-		qType    dnsmessage.Type
-		wantNil  bool
-		wantType dnsmessage.Type
+		name      string
+		qName     string
+		qType     dnsmessage.Type
+		wantNil   bool
+		wantCount int
+		wantType  dnsmessage.Type
 	}{
 		{
-			name:     "A query for pentameter.local",
-			qName:    pentameterHostname,
-			qType:    dnsmessage.TypeA,
-			wantNil:  false,
-			wantType: dnsmessage.TypeA,
+			name:      "A query for pentameter.local",
+			qName:     pentameterHostname,
+			qType:     dnsmessage.TypeA,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeA,
 		},
 		{
-			name:     "PTR query for service",
-			qName:    serviceName,
-			qType:    dnsmessage.TypePTR,
-			wantNil:  false,
-			wantType: dnsmessage.TypePTR,
+			name:      "DNS-SD service enumeration",
+			qName:     dnsSDServiceName,
+			qType:     dnsmessage.TypePTR,
+			wantCount: 3, // pentameter, http, prometheus-http
+			wantType:  dnsmessage.TypePTR,
 		},
 		{
-			name:     "SRV query for instance",
-			qName:    instanceName,
-			qType:    dnsmessage.TypeSRV,
-			wantNil:  false,
-			wantType: dnsmessage.TypeSRV,
+			name:      "PTR query for pentameter service",
+			qName:     pentameterServiceName,
+			qType:     dnsmessage.TypePTR,
+			wantCount: 1,
+			wantType:  dnsmessage.TypePTR,
 		},
 		{
-			name:     "TXT query for instance",
-			qName:    instanceName,
-			qType:    dnsmessage.TypeTXT,
-			wantNil:  false,
-			wantType: dnsmessage.TypeTXT,
+			name:      "PTR query for http service",
+			qName:     httpServiceName,
+			qType:     dnsmessage.TypePTR,
+			wantCount: 1,
+			wantType:  dnsmessage.TypePTR,
+		},
+		{
+			name:      "PTR query for prometheus-http service",
+			qName:     promHTTPServiceName,
+			qType:     dnsmessage.TypePTR,
+			wantCount: 1,
+			wantType:  dnsmessage.TypePTR,
+		},
+		{
+			name:      "SRV query for pentameter instance",
+			qName:     pentameterInstanceName,
+			qType:     dnsmessage.TypeSRV,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeSRV,
+		},
+		{
+			name:      "SRV query for http instance",
+			qName:     httpInstanceName,
+			qType:     dnsmessage.TypeSRV,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeSRV,
+		},
+		{
+			name:      "SRV query for prometheus-http instance",
+			qName:     promHTTPInstanceName,
+			qType:     dnsmessage.TypeSRV,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeSRV,
+		},
+		{
+			name:      "TXT query for pentameter instance",
+			qName:     pentameterInstanceName,
+			qType:     dnsmessage.TypeTXT,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeTXT,
+		},
+		{
+			name:      "TXT query for http instance",
+			qName:     httpInstanceName,
+			qType:     dnsmessage.TypeTXT,
+			wantCount: 1,
+			wantType:  dnsmessage.TypeTXT,
 		},
 		{
 			name:    "unrelated A query",
@@ -172,15 +246,20 @@ func TestBuildResponseMatching(t *testing.T) {
 				Type:  tt.qType,
 				Class: dnsmessage.ClassINET,
 			}
-			resp := adv.buildResponse(q)
-			if tt.wantNil && resp != nil {
-				t.Error("expected nil response")
+			responses := adv.buildResponses(q)
+			if tt.wantNil && responses != nil {
+				t.Error("expected nil responses")
 			}
-			if !tt.wantNil && resp == nil {
-				t.Error("expected non-nil response")
-			}
-			if !tt.wantNil && resp != nil && resp.Answers[0].Header.Type != tt.wantType {
-				t.Errorf("expected answer type %v, got %v", tt.wantType, resp.Answers[0].Header.Type)
+			if !tt.wantNil {
+				if responses == nil {
+					t.Fatal("expected non-nil responses")
+				}
+				if len(responses) != tt.wantCount {
+					t.Fatalf("expected %d responses, got %d", tt.wantCount, len(responses))
+				}
+				if responses[0].Answers[0].Header.Type != tt.wantType {
+					t.Errorf("expected answer type %v, got %v", tt.wantType, responses[0].Answers[0].Header.Type)
+				}
 			}
 		})
 	}
@@ -220,10 +299,19 @@ func TestResponsesPackSuccessfully(t *testing.T) {
 	name := dnsmessage.MustNewName(pentameterHostname)
 	responses := []*dnsmessage.Message{
 		adv.buildAResponse(name),
-		adv.buildPTRResponse(),
-		adv.buildSRVResponse(),
-		adv.buildTXTResponse(),
+		adv.buildPTRResponse(pentameterServiceName, pentameterInstanceName),
+		adv.buildPTRResponse(httpServiceName, httpInstanceName),
+		adv.buildPTRResponse(promHTTPServiceName, promHTTPInstanceName),
+		adv.buildSRVResponse(pentameterInstanceName),
+		adv.buildSRVResponse(httpInstanceName),
+		adv.buildSRVResponse(promHTTPInstanceName),
+		adv.buildTXTResponse(pentameterInstanceName),
+		adv.buildTXTResponse(httpInstanceName),
+		adv.buildTXTResponse(promHTTPInstanceName),
 	}
+
+	// Also include service enum responses
+	responses = append(responses, adv.buildServiceEnumResponses()...)
 
 	for i, resp := range responses {
 		if resp == nil {
@@ -232,6 +320,23 @@ func TestResponsesPackSuccessfully(t *testing.T) {
 		}
 		if _, err := resp.Pack(); err != nil {
 			t.Errorf("response %d failed to pack: %v", i, err)
+		}
+	}
+}
+
+func TestAllServiceTypes(t *testing.T) {
+	services := allServiceTypes()
+	if len(services) != 3 {
+		t.Fatalf("expected 3 service types, got %d", len(services))
+	}
+
+	// Verify each service type has both fields set
+	for i, svc := range services {
+		if svc.service == "" {
+			t.Errorf("service type %d has empty service name", i)
+		}
+		if svc.instance == "" {
+			t.Errorf("service type %d has empty instance name", i)
 		}
 	}
 }

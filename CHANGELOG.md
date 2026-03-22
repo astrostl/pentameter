@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-03-22
+
+### Added
+- **DNS-SD service type enumeration** (RFC 6763 §9) - Pentameter now responds to `_services._dns-sd._udp.local.` queries, making all advertised service types discoverable by standard mDNS browsers without prior knowledge of service names
+- **Multi-service-type mDNS advertisement** - In addition to `_pentameter._tcp`, pentameter now also advertises as:
+  - `_http._tcp` - discoverable by any HTTP service browser
+  - `_prometheus-http._tcp` - discoverable by Prometheus auto-discovery tools
+
 ## [0.4.5] - 2026-03-21
 
 ### Added
