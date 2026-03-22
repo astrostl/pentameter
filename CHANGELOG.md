@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-03-22
+
+### Fixed
+- **mDNS advertiser now responds to standard multicast queries** - Responses are sent to the multicast group (`224.0.0.251:5353`) per RFC 6762, not unicast back to the querier. This makes pentameter discoverable by any mDNS client doing direct multicast PTR queries, not just clients that go through the OS mDNS resolver
+- **Explicit multicast interface selection for outgoing responses** - Uses `ipv4.PacketConn` with `SetMulticastInterface` to ensure responses go out on the correct network interface
+- **Enabled multicast loopback** - Local mDNS clients on the same host can now see pentameter's responses
+
 ## [0.4.6] - 2026-03-22
 
 ### Added

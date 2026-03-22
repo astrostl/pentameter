@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
+	"golang.org/x/net/ipv4"
 )
 
 const (
@@ -33,6 +34,8 @@ type MDNSAdvertiser struct {
 	ip       net.IP
 	httpPort uint16
 	conn     *net.UDPConn
+	pconn    *ipv4.PacketConn
+	iface    *net.Interface
 }
 
 // StartMDNSAdvertiser starts an mDNS responder that advertises pentameter on the network.
@@ -53,7 +56,7 @@ func StartMDNSAdvertiser(httpPort string, verbose bool) (*MDNSAdvertiser, error)
 		return nil, fmt.Errorf("could not determine local IP for mDNS advertisement: %w", err)
 	}
 
-	conn, err := listenMDNS(iface)
+	conn, pconn, err := listenMDNS(iface)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on mDNS port: %w", err)
 	}
@@ -62,6 +65,8 @@ func StartMDNSAdvertiser(httpPort string, verbose bool) (*MDNSAdvertiser, error)
 		ip:       ip,
 		httpPort: uint16(port),
 		conn:     conn,
+		pconn:    pconn,
+		iface:    iface,
 	}
 
 	go adv.listen(verbose)
@@ -81,19 +86,38 @@ func (a *MDNSAdvertiser) Close() error {
 	return nil
 }
 
-// listenMDNS creates a UDP connection listening on the mDNS multicast group.
-func listenMDNS(iface *net.Interface) (*net.UDPConn, error) {
+// listenMDNS creates a UDP connection listening on the mDNS multicast group
+// and returns both the raw conn (for reading) and an ipv4.PacketConn (for
+// multicast-aware sending with explicit interface control).
+func listenMDNS(iface *net.Interface) (*net.UDPConn, *ipv4.PacketConn, error) {
 	mcastAddr, err := net.ResolveUDPAddr("udp4", mdnsAddress)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	conn, err := net.ListenMulticastUDP("udp4", iface, mcastAddr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return conn, nil
+	pconn := ipv4.NewPacketConn(conn)
+
+	// Set the outgoing multicast interface so responses go out on the right NIC.
+	if iface != nil {
+		if err := pconn.SetMulticastInterface(iface); err != nil {
+			conn.Close()
+			return nil, nil, fmt.Errorf("failed to set multicast interface: %w", err)
+		}
+	}
+
+	// Enable multicast loopback so local clients (e.g. dns-sd, avahi-browse
+	// running on the same host) can see our responses.
+	if err := pconn.SetMulticastLoopback(true); err != nil {
+		conn.Close()
+		return nil, nil, fmt.Errorf("failed to enable multicast loopback: %w", err)
+	}
+
+	return conn, pconn, nil
 }
 
 // getInterfaceIPv4 returns the first IPv4 address of the given interface.
@@ -145,8 +169,23 @@ func (a *MDNSAdvertiser) handleQuery(data []byte, remoteAddr net.Addr, verbose b
 		return
 	}
 
+	if verbose {
+		for i := range msg.Questions {
+			log.Printf("mDNS advertise: RECV query from %s: %s %s (class=0x%04x)",
+				remoteAddr, msg.Questions[i].Name.String(), msg.Questions[i].Type, msg.Questions[i].Class)
+		}
+	}
+
+	mcastDst := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
+
 	for i := range msg.Questions {
 		responses := a.buildResponses(&msg.Questions[i])
+
+		// RFC 6762 §5.4: If the QU (unicast-response) bit is set (top bit of
+		// question class), respond unicast to the querier. Otherwise, respond
+		// to the multicast group so all listeners on the network see the reply.
+		unicast := msg.Questions[i].Class&(1<<15) != 0
+
 		for _, response := range responses {
 			packed, err := response.Pack()
 			if err != nil {
@@ -156,9 +195,27 @@ func (a *MDNSAdvertiser) handleQuery(data []byte, remoteAddr net.Addr, verbose b
 				continue
 			}
 
-			if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil {
+			if unicast {
 				if verbose {
-					log.Printf("mDNS advertise: failed to send response: %v", err)
+					log.Printf("mDNS advertise: SEND unicast response to %s (%d bytes)", remoteAddr, len(packed))
+				}
+				if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil && verbose {
+					log.Printf("mDNS advertise: failed to send unicast response: %v", err)
+				}
+			} else {
+				// Use ipv4.PacketConn for multicast send — this ensures the
+				// packet goes out on the correct interface via SetMulticastInterface.
+				var cm *ipv4.ControlMessage
+				if a.iface != nil {
+					cm = &ipv4.ControlMessage{IfIndex: a.iface.Index}
+				}
+				if verbose {
+					log.Printf("mDNS advertise: SEND multicast response to %s (%d bytes, iface=%v)", mcastDst, len(packed), a.iface)
+				}
+				if _, err := a.pconn.WriteTo(packed, cm, mcastDst); err != nil {
+					if verbose {
+						log.Printf("mDNS advertise: FAILED to send multicast response: %v", err)
+					}
 				}
 			}
 		}
