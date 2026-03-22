@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-03-21
+
+### Added
+- **mDNS service advertisement** - Pentameter now broadcasts itself on the local network via mDNS, allowing other tools and clients to discover it automatically
+  - Responds to queries for `pentameter.local.` (A record)
+  - Registers `_pentameter._tcp.local.` service for DNS-SD browsing
+  - SRV records include HTTP port; TXT records include metrics path and version
+  - Non-blocking: logs a warning and continues if mDNS advertisement fails
+
 ## [0.4.4] - 2025-12-13
 
 ### Added

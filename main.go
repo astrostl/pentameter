@@ -2307,6 +2307,18 @@ func main() {
 		}
 	}()
 
+	// Start mDNS advertisement so pentameter can be discovered on the network
+	adv, err := StartMDNSAdvertiser(cfg.httpPort, true)
+	if err != nil {
+		log.Printf("Warning: mDNS advertisement disabled: %v", err)
+	} else {
+		defer func() {
+			if err := adv.Close(); err != nil {
+				log.Printf("Error closing mDNS advertiser: %v", err)
+			}
+		}()
+	}
+
 	if cfg.listenMode {
 		monitor.StartEventListener(ctx, cfg.pollInterval)
 		return
