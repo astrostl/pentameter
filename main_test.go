@@ -79,34 +79,12 @@ func TestNewPoolMonitor(t *testing.T) {
 		t.Error("New monitor should not be connected initially")
 	}
 
-	if poolMonitor.retryConfig.MaxRetries != maxRetries {
-		t.Errorf("Expected MaxRetries %d, got %d", maxRetries, poolMonitor.retryConfig.MaxRetries)
+	if poolMonitor.ic.RetryMax != maxRetries {
+		t.Errorf("Expected RetryMax %d, got %d", maxRetries, poolMonitor.ic.RetryMax)
 	}
 }
 
-func TestCalculateBackoffDelay(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	tests := []struct {
-		attempt  int
-		expected time.Duration
-	}{
-		{1, 1 * time.Second},
-		{2, 2 * time.Second},
-		{3, 4 * time.Second},
-		{4, 8 * time.Second},
-		{5, 16 * time.Second},
-		{6, 30 * time.Second},  // Capped at maxDelay
-		{10, 30 * time.Second}, // Still capped
-	}
-
-	for _, test := range tests {
-		result := poolMonitor.calculateBackoffDelay(test.attempt)
-		if result != test.expected {
-			t.Errorf("Attempt %d: expected %v, got %v", test.attempt, test.expected, result)
-		}
-	}
-}
+// (backoff-delay math now lives in and is tested by the intellicenter package.)
 
 func TestConnectWithValidServer(t *testing.T) {
 	responses := map[string]IntelliCenterResponse{}
@@ -135,8 +113,8 @@ func TestConnectWithValidServer(t *testing.T) {
 func TestConnectWithInvalidServer(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
 	// Reduce retry config for faster test execution
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	ctx := t.Context()
 
 	err := poolMonitor.Connect(ctx)
@@ -585,22 +563,8 @@ func TestProcessPumpObjectWithMissingData(t *testing.T) {
 	}
 }
 
-func TestValidateResponse(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	messageID := "test-message-123"
-	poolMonitor.pendingRequests[messageID] = time.Now()
-
-	if len(poolMonitor.pendingRequests) != 1 {
-		t.Error("Should have one pending request")
-	}
-
-	poolMonitor.validateResponse(messageID)
-
-	if len(poolMonitor.pendingRequests) != 0 {
-		t.Error("Pending request should be removed after validation")
-	}
-}
+// (request/response correlation now lives in the intellicenter package's
+// round-trip; PoolMonitor no longer tracks pending requests.)
 
 func TestGetEnvOrDefault(t *testing.T) {
 	tests := []struct {
@@ -870,13 +834,12 @@ func TestEnsureConnected(t *testing.T) {
 func TestEnsureConnectedWithUnhealthyConnection(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
 	// Reduce retry config for faster test execution
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	ctx := t.Context()
 
 	// Force connected state but no actual connection
 	poolMonitor.connected = true
-	poolMonitor.conn = nil
 
 	err := poolMonitor.EnsureConnected(ctx)
 	if err == nil {
@@ -922,7 +885,6 @@ func TestIsHealthyWithFailedPing(t *testing.T) {
 
 	// Test without any connection
 	poolMonitor.connected = false
-	poolMonitor.conn = nil
 
 	if poolMonitor.IsHealthy(ctx) {
 		t.Error("Health check should fail without connection")
@@ -930,7 +892,6 @@ func TestIsHealthyWithFailedPing(t *testing.T) {
 
 	// Test with connection marked true but no actual conn object
 	poolMonitor.connected = true
-	poolMonitor.conn = nil
 
 	if poolMonitor.IsHealthy(ctx) {
 		t.Error("Health check should fail when conn is nil")
@@ -1132,8 +1093,8 @@ func TestStartTemperaturePollingWithConnectionFailures(t *testing.T) {
 	// Test polling with continuous connection failures
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
 	// Reduce retry config for faster test execution
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	poolMonitor.disableAutoRediscovery = true // Disable re-discovery for test
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
@@ -1267,7 +1228,6 @@ func TestIsHealthyPingFailure(t *testing.T) {
 
 	// Test case 1: nil connection should return false immediately
 	poolMonitor.connected = true
-	poolMonitor.conn = nil                    // This will cause early return false
 	poolMonitor.lastHealthCheck = time.Time{} // Force health check
 
 	// This should fail because conn is nil (early return)
@@ -1280,7 +1240,6 @@ func TestIsHealthyPingFailure(t *testing.T) {
 
 	// Test case 2: Test with disconnected state
 	poolMonitor.connected = false
-	poolMonitor.conn = nil
 
 	if poolMonitor.IsHealthy(ctx) {
 		t.Error("Health check should fail when disconnected")
@@ -1335,8 +1294,8 @@ func TestGetAirTemperatureWithInvalidTemperature(t *testing.T) {
 func TestConnectWithRetryContextCancellation(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
 	// Reduce retry config for faster test execution
-	poolMonitor.retryConfig.MaxRetries = 3
-	poolMonitor.retryConfig.BaseDelay = 50 * time.Millisecond
+	poolMonitor.ic.RetryMax = 3
+	poolMonitor.ic.RetryBaseDelay = 50 * time.Millisecond
 
 	// Create context that gets canceled during retry
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1347,14 +1306,14 @@ func TestConnectWithRetryContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	err := poolMonitor.ConnectWithRetry(ctx)
+	err := poolMonitor.Connect(ctx)
 	if err == nil {
 		t.Error("Expected error due to context cancellation")
 	}
 
 	// The error could be either context.Canceled or a connection error
 	// depending on timing, both are acceptable for this test
-	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "failed to connect") {
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "connect failed") {
 		t.Errorf("Expected context.Canceled or connection error, got: %v", err)
 	}
 }
@@ -2938,8 +2897,8 @@ func TestHandlePollingSuccess(t *testing.T) {
 
 func TestConsecutiveFailureTracking(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	poolMonitor.disableAutoRediscovery = true
 
 	// Verify initial state
@@ -2972,8 +2931,8 @@ func TestConsecutiveFailureTracking(t *testing.T) {
 
 func TestFailureThresholdTriggersRediscoveryMode(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	poolMonitor.failureThreshold = 3
 
 	// Test that we don't enter re-discovery mode before threshold
@@ -3008,8 +2967,8 @@ func TestFailureThresholdTriggersRediscoveryMode(t *testing.T) {
 
 func TestRediscoveryModeDisabledByFlag(t *testing.T) {
 	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.retryConfig.MaxRetries = 1
-	poolMonitor.retryConfig.BaseDelay = 10 * time.Millisecond
+	poolMonitor.ic.RetryMax = 1
+	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
 	poolMonitor.disableAutoRediscovery = true
 	poolMonitor.failureThreshold = 3
 

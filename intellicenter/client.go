@@ -19,6 +19,12 @@ import (
 type Client struct {
 	url string
 
+	// Retry tuning for ConnectWithRetry (defaulted in New; overridable, e.g. for
+	// fast tests).
+	RetryMax       int
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
+
 	mu   sync.Mutex
 	conn *websocket.Conn
 	seq  int
@@ -31,7 +37,12 @@ func New(host, port string) *Client {
 	if port == "" {
 		port = defaultICPortStr
 	}
-	return &Client{url: fmt.Sprintf("ws://%s", net.JoinHostPort(host, port))}
+	return &Client{
+		url:            fmt.Sprintf("ws://%s", net.JoinHostPort(host, port)),
+		RetryMax:       maxRetries,
+		RetryBaseDelay: baseDelay,
+		RetryMaxDelay:  maxDelay,
+	}
 }
 
 // Connect dials once. Use ConnectWithRetry for backoff.
@@ -62,12 +73,12 @@ func (c *Client) Connect(ctx context.Context) error {
 // attempts), honoring ctx cancellation.
 func (c *Client) ConnectWithRetry(ctx context.Context) error {
 	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	for attempt := 0; attempt <= c.RetryMax; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("canceled during retry: %w", ctx.Err())
-			case <-time.After(backoffDelay(attempt)):
+			case <-time.After(c.backoffDelay(attempt)):
 			}
 		}
 		if err := c.Connect(ctx); err != nil {
@@ -76,13 +87,13 @@ func (c *Client) ConnectWithRetry(ctx context.Context) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("connect failed after %d attempts: %w", maxRetries+1, lastErr)
+	return fmt.Errorf("connect failed after %d attempts: %w", c.RetryMax+1, lastErr)
 }
 
-func backoffDelay(attempt int) time.Duration {
-	d := float64(baseDelay) * math.Pow(backoffFactor, float64(attempt-1))
-	if d > float64(maxDelay) {
-		d = float64(maxDelay)
+func (c *Client) backoffDelay(attempt int) time.Duration {
+	d := float64(c.RetryBaseDelay) * math.Pow(backoffFactor, float64(attempt-1))
+	if d > float64(c.RetryMaxDelay) {
+		d = float64(c.RetryMaxDelay)
 	}
 	return time.Duration(d)
 }
