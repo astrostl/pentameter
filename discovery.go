@@ -122,8 +122,8 @@ func isUsableMulticastInterface(iface *net.Interface) bool {
 // sendHostnameQuery sends an mDNS query for a specific hostname.
 func sendHostnameQuery(conn *net.UDPConn, mcastAddr *net.UDPAddr, hostname string) error {
 	var msg dnsmessage.Message
-	msg.Header.ID = 0
-	msg.Header.RecursionDesired = false
+	msg.ID = 0
+	msg.RecursionDesired = false
 	msg.Questions = []dnsmessage.Question{
 		{
 			Name:  dnsmessage.MustNewName(hostname),

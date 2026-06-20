@@ -54,7 +54,7 @@ const (
 	// Status description strings.
 	statusDescOff    = "OFF"
 	statusDescOn     = "ON"
-	statusDescFreeze = "FREEZE"
+	statusDescFreeze = keyFREEZE
 
 	// Boolean string constants.
 	trueString = "true"
@@ -78,6 +78,66 @@ const (
 	htModeHeating         = 1
 	htModeHeatPumpHeating = 4
 	htModeHeatPumpCooling = 9
+
+	// Protocol command names.
+	cmdGetParamList = "GetParamList"
+	cmdGetQuery     = "GetQuery"
+
+	// Query conditions.
+	condBody    = "OBJTYP=BODY"
+	condCircuit = "OBJTYP=CIRCUIT"
+
+	// Param keys / JSON field names.
+	fieldObjnam = "objnam"
+	fieldParams = "params"
+	keyOBJTYP   = "OBJTYP"
+	keyHTMODE   = "HTMODE"
+	keyPROBE    = "PROBE"
+	keyACT      = "ACT"
+	keyGPM      = "GPM"
+
+	// Special object names.
+	objnamIncr       = "INCR"
+	objnamAirSensor  = "_A135"
+	objnamFreezeFeat = "_FEA2"
+
+	// Subtype / body-name values.
+	subtypGeneric = "GENERIC"
+	bodyNamePool  = "pool"
+	bodyNameSpa   = "spa"
+
+	// Thermal status description words.
+	statusWordOff     = "off"
+	statusWordHeating = "heating"
+	statusWordIdle    = "idle"
+	statusWordCooling = "cooling"
+	statusWordUnknown = "unknown"
+
+	// Structured log field names.
+	logFieldBody    = "body"
+	logFieldCircuit = "circuit"
+	logFieldHeater  = "heater"
+	fieldName       = "name"
+	fieldSubtyp     = "subtyp"
+	fieldCommand    = "command"
+
+	// Additional param keys.
+	keyHTSRC   = "HTSRC"
+	keyDLY     = "DLY"
+	keyRPM     = "RPM"
+	keySNAME   = "SNAME"
+	keySTATUS  = "STATUS"
+	keyTEMP    = "TEMP"
+	keySUBTYP  = "SUBTYP"
+	keyLOTMP   = "LOTMP"
+	keyHITMP   = "HITMP"
+	keyWATTS   = "WATTS"
+	keySPEED   = "SPEED"
+	keyPARENT  = "PARENT"
+	keyUSE     = "USE"
+	keyLISTORD = "LISTORD"
+	keySTATIC  = "STATIC"
+	keyFREEZE  = "FREEZE"
 )
 
 // IntelliCenter API structures are aliased to the intellicenter package, which
@@ -97,7 +157,7 @@ var (
 			Name: "water_temperature_fahrenheit",
 			Help: "Current water temperature in Fahrenheit",
 		},
-		[]string{"body", "name"},
+		[]string{logFieldBody, fieldName},
 	)
 
 	airTemperature = prometheus.NewGaugeVec(
@@ -105,7 +165,7 @@ var (
 			Name: "air_temperature_fahrenheit",
 			Help: "Current outdoor air temperature in Fahrenheit",
 		},
-		[]string{"sensor", "name"},
+		[]string{"sensor", fieldName},
 	)
 
 	connectionFailure = prometheus.NewGauge(
@@ -127,7 +187,7 @@ var (
 			Name: "pump_rpm",
 			Help: "Current pump speed in revolutions per minute",
 		},
-		[]string{"pump", "name"},
+		[]string{"pump", fieldName},
 	)
 
 	circuitStatus = prometheus.NewGaugeVec(
@@ -135,7 +195,7 @@ var (
 			Name: "circuit_status",
 			Help: "Circuit status (0=off, 1=on, 2=freeze protection active)",
 		},
-		[]string{"circuit", "name", "subtyp"},
+		[]string{logFieldCircuit, fieldName, fieldSubtyp},
 	)
 
 	thermalStatus = prometheus.NewGaugeVec(
@@ -145,7 +205,7 @@ var (
 				"(0=off, 1=heating, 2=idle, 3=cooling). Note: 'idle' is pentameter's interpretation " +
 				"of HTMODE=0+assigned heater, not an IntelliCenter native status.",
 		},
-		[]string{"heater", "name", "subtyp"},
+		[]string{logFieldHeater, fieldName, fieldSubtyp},
 	)
 
 	thermalLowSetpoint = prometheus.NewGaugeVec(
@@ -153,7 +213,7 @@ var (
 			Name: "thermal_low_setpoint_fahrenheit",
 			Help: "Heating target temperature in Fahrenheit (turn on heating when temp drops below this)",
 		},
-		[]string{"heater", "name", "subtyp"},
+		[]string{logFieldHeater, fieldName, fieldSubtyp},
 	)
 
 	thermalHighSetpoint = prometheus.NewGaugeVec(
@@ -161,7 +221,7 @@ var (
 			Name: "thermal_high_setpoint_fahrenheit",
 			Help: "Cooling target temperature in Fahrenheit (turn on cooling when temp rises above this)",
 		},
-		[]string{"heater", "name", "subtyp"},
+		[]string{logFieldHeater, fieldName, fieldSubtyp},
 	)
 
 	featureStatus = prometheus.NewGaugeVec(
@@ -169,7 +229,7 @@ var (
 			Name: "feature_status",
 			Help: "Feature status (0=off, 1=on, 2=freeze protection active)",
 		},
-		[]string{"feature", "name", "subtyp"},
+		[]string{"feature", fieldName, fieldSubtyp},
 	)
 )
 
@@ -400,8 +460,8 @@ func (pm *PoolMonitor) outputRawJSON(prefix string, msg map[string]interface{}) 
 // outputRawObjectData outputs ObjectData as raw JSON for polling context.
 func (pm *PoolMonitor) outputRawObjectData(obj ObjectData) {
 	objMap := map[string]interface{}{
-		"objnam": obj.ObjName,
-		"params": obj.Params,
+		fieldObjnam: obj.ObjName,
+		fieldParams: obj.Params,
 	}
 	pm.outputRawJSON("POLL", objMap)
 }
@@ -452,8 +512,8 @@ func (pm *PoolMonitor) processChangeItem(change interface{}) {
 		return
 	}
 
-	objnam, _ := changeMap["objnam"].(string)
-	paramsRaw, ok := changeMap["params"].(map[string]interface{})
+	objnam, _ := changeMap[fieldObjnam].(string)
+	paramsRaw, ok := changeMap[fieldParams].(map[string]interface{})
 	if !ok {
 		return
 	}
@@ -480,8 +540,8 @@ func (pm *PoolMonitor) convertToObjectData(objnam string, paramsRaw map[string]i
 // processPushObject routes a push notification to the appropriate handler.
 // Uses the same processing functions as polling mode, then logs a human-readable summary.
 func (pm *PoolMonitor) processPushObject(obj ObjectData) {
-	objType := obj.Params["OBJTYP"]
-	name := obj.Params["SNAME"]
+	objType := obj.Params[keyOBJTYP]
+	name := obj.Params[keySNAME]
 	if name == "" {
 		name = obj.ObjName
 	}
@@ -510,7 +570,7 @@ func (pm *PoolMonitor) handleBodyPush(obj ObjectData, name string) {
 		pm.referencedHeaters[k] = v
 	}
 	log.Printf("PUSH: %s temp=%s°F setpoint=%s°F htmode=%s status=%s",
-		name, obj.Params["TEMP"], obj.Params["SETPT"], obj.Params["HTMODE"], obj.Params["STATUS"])
+		name, obj.Params[keyTEMP], obj.Params["SETPT"], obj.Params[keyHTMODE], obj.Params[keySTATUS])
 }
 
 func (pm *PoolMonitor) handlePumpPush(obj ObjectData, name string) {
@@ -518,27 +578,27 @@ func (pm *PoolMonitor) handlePumpPush(obj ObjectData, name string) {
 		log.Printf("PUSH: %s pump error: %v", name, err)
 	} else {
 		log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
-			name, obj.Params["RPM"], obj.Params["PWR"], obj.Params["STATUS"])
+			name, obj.Params[keyRPM], obj.Params["PWR"], obj.Params[keySTATUS])
 	}
 }
 
 func (pm *PoolMonitor) handleCircuitPush(obj ObjectData, name string) {
 	pm.processCircuitObject(obj)
-	log.Printf("PUSH: %s status=%s", name, obj.Params["STATUS"])
+	log.Printf("PUSH: %s status=%s", name, obj.Params[keySTATUS])
 }
 
 func (pm *PoolMonitor) handleHeaterPush(obj ObjectData, name string) {
 	pm.processHeaterObject(obj)
-	log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params["STATUS"], obj.Params["MODE"])
+	log.Printf("PUSH: %s status=%s mode=%s", name, obj.Params[keySTATUS], obj.Params["MODE"])
 }
 
 func (pm *PoolMonitor) handleCircGrpPush(obj ObjectData) {
 	pm.trackCircGrp(obj)
 	// Log with resolved circuit group names
-	groupName := pm.resolveCircuitName(obj.Params["PARENT"])
-	circuitName := pm.resolveCircuitName(obj.Params["CIRCUIT"])
-	act := obj.Params["ACT"]
-	use := obj.Params["USE"]
+	groupName := pm.resolveCircuitName(obj.Params[keyPARENT])
+	circuitName := pm.resolveCircuitName(obj.Params[objTypeCircuit])
+	act := obj.Params[keyACT]
+	use := obj.Params[keyUSE]
 	log.Printf("PUSH: CircGrp %s/%s act=%s use=%s",
 		groupName, circuitName, act, use)
 }
@@ -623,12 +683,12 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 
 func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error) {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
-		Condition: "OBJTYP=BODY",
+		Command:   cmdGetParamList,
+		Condition: condBody,
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "TEMP", "SUBTYP", "HTMODE", "HTSRC", "LOTMP", "HITMP"},
+				ObjName: objnamIncr,
+				Keys:    []string{keySNAME, keySTATUS, keyTEMP, keySUBTYP, keyHTMODE, keyHTSRC, keyLOTMP, keyHITMP},
 			},
 		},
 	}
@@ -636,14 +696,14 @@ func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error)
 }
 
 func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[string]BodyHeaterInfo) {
-	name := obj.Params["SNAME"]
-	tempStr := obj.Params["TEMP"]
-	subtype := obj.Params["SUBTYP"]
-	status := obj.Params["STATUS"]
-	htmodeStr := obj.Params["HTMODE"]
-	htsrc := obj.Params["HTSRC"]
-	lotmpStr := obj.Params["LOTMP"]
-	hitmpStr := obj.Params["HITMP"]
+	name := obj.Params[keySNAME]
+	tempStr := obj.Params[keyTEMP]
+	subtype := obj.Params[keySUBTYP]
+	status := obj.Params[keySTATUS]
+	htmodeStr := obj.Params[keyHTMODE]
+	htsrc := obj.Params[keyHTSRC]
+	lotmpStr := obj.Params[keyLOTMP]
+	hitmpStr := obj.Params[keyHITMP]
 
 	pm.processBodyTemperature(name, tempStr, subtype, status, obj)
 	pm.processBodyHeatingStatus(name, htmodeStr, obj.ObjName)
@@ -719,12 +779,12 @@ func (pm *PoolMonitor) processHeaterAssignment(
 
 func (pm *PoolMonitor) getAirTemperature() error {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
+		Command:   cmdGetParamList,
 		Condition: "",
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "_A135",
-				Keys:    []string{"SNAME", "STATUS", "PROBE", "SUBTYP"},
+				ObjName: objnamAirSensor,
+				Keys:    []string{keySNAME, keySTATUS, keyPROBE, keySUBTYP},
 			},
 		},
 	}
@@ -736,10 +796,10 @@ func (pm *PoolMonitor) getAirTemperature() error {
 
 	// Update Prometheus metrics
 	for _, obj := range resp.ObjectList {
-		name := obj.Params["SNAME"]
-		tempStr := obj.Params["PROBE"]
-		subtype := obj.Params["SUBTYP"]
-		status := obj.Params["STATUS"]
+		name := obj.Params[keySNAME]
+		tempStr := obj.Params[keyPROBE]
+		subtype := obj.Params[keySUBTYP]
+		status := obj.Params[keySTATUS]
 
 		if tempStr != "" && name != "" {
 			tempFahrenheit, err := strconv.ParseFloat(tempStr, 64)
@@ -776,12 +836,12 @@ func (pm *PoolMonitor) getPumpData() error {
 
 func (pm *PoolMonitor) getFreezeProtectionStatus() error {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
-		Condition: "OBJTYP=CIRCUIT",
+		Command:   cmdGetParamList,
+		Condition: condCircuit,
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "_FEA2",
-				Keys:    []string{"SNAME", "STATUS"},
+				ObjName: objnamFreezeFeat,
+				Keys:    []string{keySNAME, keySTATUS},
 			},
 		},
 	}
@@ -794,7 +854,7 @@ func (pm *PoolMonitor) getFreezeProtectionStatus() error {
 	// Check _FEA2 status to determine if freeze protection is active
 	pm.freezeProtectionActive = false
 	for _, obj := range resp.ObjectList {
-		if obj.ObjName == "_FEA2" && obj.Params["STATUS"] == statusOn {
+		if obj.ObjName == objnamFreezeFeat && obj.Params[keySTATUS] == statusOn {
 			pm.freezeProtectionActive = true
 			pm.logIfNotListeningf("Freeze protection is ACTIVE")
 			break
@@ -826,7 +886,7 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 	}
 
 	// Cleanup stale circuit metrics
-	pm.cleanupStaleMetrics(previousCircuitKeys, pm.activeCircuitKeys, circuitStatus, "circuit")
+	pm.cleanupStaleMetrics(previousCircuitKeys, pm.activeCircuitKeys, circuitStatus, logFieldCircuit)
 
 	// Cleanup stale feature metrics
 	pm.cleanupStaleMetrics(previousFeatureKeys, pm.activeFeatureKeys, featureStatus, "feature")
@@ -851,12 +911,12 @@ func (pm *PoolMonitor) cleanupStaleMetrics(previous, current map[string]bool, me
 
 func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
-		Condition: "OBJTYP=CIRCUIT",
+		Command:   cmdGetParamList,
+		Condition: condCircuit,
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "OBJTYP", "SUBTYP", "FREEZE"},
+				ObjName: objnamIncr,
+				Keys:    []string{keySNAME, keySTATUS, keyOBJTYP, keySUBTYP, keyFREEZE},
 			},
 		},
 	}
@@ -864,10 +924,10 @@ func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
 }
 
 func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
-	name := obj.Params["SNAME"]
-	status := obj.Params["STATUS"]
-	subtype := obj.Params["SUBTYP"]
-	freezeEnabled := obj.Params["FREEZE"] == statusOn
+	name := obj.Params[keySNAME]
+	status := obj.Params[keySTATUS]
+	subtype := obj.Params[keySUBTYP]
+	freezeEnabled := obj.Params[keyFREEZE] == statusOn
 
 	if name == "" || status == "" {
 		return
@@ -890,7 +950,7 @@ func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
 func (pm *PoolMonitor) isValidCircuit(objName, name, subtype string) bool {
 	// Accept regular circuits (C prefix) and circuit groups (GRP prefix)
 	hasValidPrefix := strings.HasPrefix(objName, "C") || strings.HasPrefix(objName, "GRP")
-	isGenericAux := strings.HasPrefix(objName, "C") && strings.HasPrefix(name, "AUX ") && subtype == "GENERIC"
+	isGenericAux := strings.HasPrefix(objName, "C") && strings.HasPrefix(name, "AUX ") && subtype == subtypGeneric
 	return hasValidPrefix && !isGenericAux
 }
 
@@ -980,11 +1040,11 @@ func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string, freezeEnable
 
 func (pm *PoolMonitor) getBodyNameFromCircuit(name string) string {
 	lowerName := strings.ToLower(name)
-	if strings.Contains(lowerName, "spa") {
-		return "spa"
+	if strings.Contains(lowerName, bodyNameSpa) {
+		return bodyNameSpa
 	}
-	if strings.Contains(lowerName, "pool") {
-		return "pool"
+	if strings.Contains(lowerName, bodyNamePool) {
+		return bodyNamePool
 	}
 	return ""
 }
@@ -1014,12 +1074,12 @@ func (pm *PoolMonitor) getThermalStatus() error {
 	// Query all heaters, not just referenced ones
 
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
+		Command:   cmdGetParamList,
 		Condition: "OBJTYP=HEATER",
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "SUBTYP", "OBJTYP"},
+				ObjName: objnamIncr,
+				Keys:    []string{keySNAME, keySTATUS, keySUBTYP, keyOBJTYP},
 			},
 		},
 	}
@@ -1039,12 +1099,12 @@ func (pm *PoolMonitor) getThermalStatus() error {
 
 func (pm *PoolMonitor) getCircuitGroups() error {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
+		Command:   cmdGetParamList,
 		Condition: "OBJTYP=CIRCGRP",
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"OBJTYP", "PARENT", "CIRCUIT", "ACT", "USE", "DLY", "LISTORD", "STATIC"},
+				ObjName: objnamIncr,
+				Keys:    []string{keyOBJTYP, keyPARENT, objTypeCircuit, keyACT, keyUSE, keyDLY, keyLISTORD, keySTATIC},
 			},
 		},
 	}
@@ -1063,9 +1123,9 @@ func (pm *PoolMonitor) getCircuitGroups() error {
 }
 
 func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
-	name := obj.Params["SNAME"]
-	subtype := obj.Params["SUBTYP"]
-	status := obj.Params["STATUS"]
+	name := obj.Params[keySNAME]
+	subtype := obj.Params[keySUBTYP]
+	status := obj.Params[keySTATUS]
 
 	if name == "" || subtype == "" {
 		return
@@ -1162,26 +1222,26 @@ func (pm *PoolMonitor) calculateHeaterStatusFromName(heaterName, status string) 
 func (pm *PoolMonitor) getStatusDescription(status int) string {
 	switch status {
 	case 0:
-		return "off"
+		return statusWordOff
 	case 1:
-		return "heating"
+		return statusWordHeating
 	case thermalStatusIdle:
-		return "idle"
+		return statusWordIdle
 	case thermalStatusCooling:
-		return "cooling"
+		return statusWordCooling
 	default:
-		return "unknown"
+		return statusWordUnknown
 	}
 }
 
 func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration, error) {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
+		Command:   cmdGetParamList,
 		Condition: "OBJTYP=PUMP",
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "RPM", "WATTS", "GPM", "SPEED"},
+				ObjName: objnamIncr,
+				Keys:    []string{keySNAME, keySTATUS, keyRPM, keyWATTS, keyGPM, keySPEED},
 			},
 		},
 	}
@@ -1196,9 +1256,9 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 }
 
 func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Duration) error {
-	name := obj.Params["SNAME"]
-	rpmStr := obj.Params["RPM"]
-	status := obj.Params["STATUS"]
+	name := obj.Params[keySNAME]
+	rpmStr := obj.Params[keyRPM]
+	status := obj.Params[keySTATUS]
 
 	if rpmStr == "" || name == "" {
 		return nil
@@ -1401,9 +1461,9 @@ func (pm *PoolMonitor) logIfNotListeningf(format string, v ...interface{}) {
 
 func (pm *PoolMonitor) LoadFeatureConfiguration(_ context.Context) error {
 	resp, err := pm.ic.DoRaw(map[string]any{
-		"command":   "GetQuery",
-		"queryName": "GetConfiguration",
-		"arguments": "",
+		fieldCommand: cmdGetQuery,
+		"queryName":  "GetConfiguration",
+		"arguments":  "",
 	})
 	if err != nil {
 		return fmt.Errorf("configuration request: %w", err)
@@ -1432,12 +1492,12 @@ func (pm *PoolMonitor) processConfigurationItem(item interface{}) {
 		return
 	}
 
-	objName, nameOK := obj["objnam"].(string)
+	objName, nameOK := obj[fieldObjnam].(string)
 	if !nameOK || !strings.HasPrefix(objName, "FTR") {
 		return
 	}
 
-	params, paramsOK := obj["params"].(map[string]interface{})
+	params, paramsOK := obj[fieldParams].(map[string]interface{})
 	if !paramsOK {
 		return
 	}
@@ -1614,10 +1674,10 @@ func (pm *PoolMonitor) trackCircGrp(obj ObjectData) {
 
 	objName := obj.ObjName
 	newState := CircGrpState{
-		Active:  obj.Params["ACT"],
-		Use:     obj.Params["USE"],
-		Circuit: obj.Params["CIRCUIT"],
-		Parent:  obj.Params["PARENT"],
+		Active:  obj.Params[keyACT],
+		Use:     obj.Params[keyUSE],
+		Circuit: obj.Params[objTypeCircuit],
+		Parent:  obj.Params[keyPARENT],
 	}
 
 	prevState, exists := pm.previousState.CircGrps[objName]
@@ -1669,12 +1729,12 @@ func (pm *PoolMonitor) buildCircGrpChanges(prevState, newState CircGrpState) []s
 
 func (pm *PoolMonitor) getAllObjects() error {
 	req := IntelliCenterRequest{
-		Command:   "GetParamList",
+		Command:   cmdGetParamList,
 		Condition: "", // No filter - get everything
 		ObjectList: []ObjectQuery{
 			{
-				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "OBJTYP", "SUBTYP"},
+				ObjName: objnamIncr,
+				Keys:    []string{keySNAME, keySTATUS, keyOBJTYP, keySUBTYP},
 			},
 		},
 	}
@@ -1697,14 +1757,14 @@ func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
 		return
 	}
 
-	objType := obj.Params["OBJTYP"]
-	name := obj.Params["SNAME"]
-	status := obj.Params["STATUS"]
-	subtype := obj.Params["SUBTYP"]
+	objType := obj.Params[keyOBJTYP]
+	name := obj.Params[keySNAME]
+	status := obj.Params[keySTATUS]
+	subtype := obj.Params[keySUBTYP]
 
 	// Skip if already handled by specific equipment types
 	switch objType {
-	case "BODY", "PUMP", "CIRCUIT", "HEATER", "CIRCGRP":
+	case objTypeBody, objTypePump, objTypeCircuit, objTypeHeater, objTypeCircGrp:
 		return // Already tracked by specific handlers
 	case "":
 		return // No object type, skip

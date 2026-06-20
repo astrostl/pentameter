@@ -17,15 +17,15 @@ func newTestAdvertiser() *MDNSAdvertiser {
 func TestBuildAResponse(t *testing.T) {
 	adv := newTestAdvertiser()
 	name := dnsmessage.MustNewName(pentameterHostname)
-	resp := adv.buildAResponse(name)
+	resp := adv.buildAResponse(&name)
 
 	if resp == nil {
 		t.Fatal("expected non-nil response")
 	}
-	if !resp.Header.Response {
+	if !resp.Response {
 		t.Error("expected response flag to be set")
 	}
-	if !resp.Header.Authoritative {
+	if !resp.Authoritative {
 		t.Error("expected authoritative flag to be set")
 	}
 	if len(resp.Answers) != 1 {
@@ -123,10 +123,10 @@ func TestBuildServiceEnumResponses(t *testing.T) {
 	}
 
 	for i, resp := range responses {
-		if !resp.Header.Response {
+		if !resp.Response {
 			t.Errorf("response %d: expected response flag", i)
 		}
-		if !resp.Header.Authoritative {
+		if !resp.Authoritative {
 			t.Errorf("response %d: expected authoritative flag", i)
 		}
 		if len(resp.Answers) != 1 {
@@ -298,7 +298,7 @@ func TestResponsesPackSuccessfully(t *testing.T) {
 
 	name := dnsmessage.MustNewName(pentameterHostname)
 	responses := []*dnsmessage.Message{
-		adv.buildAResponse(name),
+		adv.buildAResponse(&name),
 		adv.buildPTRResponse(pentameterServiceName, pentameterInstanceName),
 		adv.buildPTRResponse(httpServiceName, httpInstanceName),
 		adv.buildPTRResponse(promHTTPServiceName, promHTTPInstanceName),

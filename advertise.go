@@ -15,18 +15,24 @@ const (
 	pentameterHostname = "pentameter.local."
 	mdnsTTL            = 120 // seconds
 
-	// DNS-SD service type enumeration (RFC 6763 §9)
+	// DNS-SD service type enumeration (RFC 6763 §9).
 	dnsSDServiceName = "_services._dns-sd._udp.local."
 
-	// Service types we advertise under
+	// Service types we advertise under.
 	pentameterServiceName = "_pentameter._tcp.local."
 	httpServiceName       = "_http._tcp.local."
 	promHTTPServiceName   = "_prometheus-http._tcp.local."
 
-	// Instance names for each service type
+	// Instance names for each service type.
 	pentameterInstanceName = "pentameter._pentameter._tcp.local."
 	httpInstanceName       = "pentameter._http._tcp.local."
 	promHTTPInstanceName   = "pentameter._prometheus-http._tcp.local."
+
+	// TXT record metadata.
+	txtPathMetrics = "path=/metrics"
+
+	// Standard mDNS multicast port (RFC 6762).
+	mdnsMcastPort = 5353
 )
 
 // MDNSAdvertiser responds to mDNS queries for pentameter's service.
@@ -81,7 +87,9 @@ func StartMDNSAdvertiser(httpPort string, verbose bool) (*MDNSAdvertiser, error)
 // Close stops the mDNS advertiser.
 func (a *MDNSAdvertiser) Close() error {
 	if a.conn != nil {
-		return a.conn.Close()
+		if err := a.conn.Close(); err != nil {
+			return fmt.Errorf("close mdns conn: %w", err)
+		}
 	}
 	return nil
 }
@@ -92,12 +100,12 @@ func (a *MDNSAdvertiser) Close() error {
 func listenMDNS(iface *net.Interface) (*net.UDPConn, *ipv4.PacketConn, error) {
 	mcastAddr, err := net.ResolveUDPAddr("udp4", mdnsAddress)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("resolve mdns addr: %w", err)
 	}
 
 	conn, err := net.ListenMulticastUDP("udp4", iface, mcastAddr)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("listen multicast udp: %w", err)
 	}
 
 	pconn := ipv4.NewPacketConn(conn)
@@ -129,13 +137,13 @@ func getInterfaceIPv4(iface *net.Interface) (net.IP, error) {
 
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("interface addrs: %w", err)
 	}
 
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok {
-			if ipv4 := ipNet.IP.To4(); ipv4 != nil {
-				return ipv4, nil
+			if v4 := ipNet.IP.To4(); v4 != nil {
+				return v4, nil
 			}
 		}
 	}
@@ -147,13 +155,13 @@ func getInterfaceIPv4(iface *net.Interface) (net.IP, error) {
 func (a *MDNSAdvertiser) listen(verbose bool) {
 	buf := make([]byte, maxBufSize)
 	for {
-		n, remoteAddr, err := a.conn.ReadFrom(buf)
+		nRead, remoteAddr, err := a.conn.ReadFrom(buf)
 		if err != nil {
-			// Connection closed
+			// Connection closed.
 			return
 		}
 
-		a.handleQuery(buf[:n], remoteAddr, verbose)
+		a.handleQuery(buf[:nRead], remoteAddr, verbose)
 	}
 }
 
@@ -164,8 +172,8 @@ func (a *MDNSAdvertiser) handleQuery(data []byte, remoteAddr net.Addr, verbose b
 		return
 	}
 
-	// Only respond to queries (QR=0)
-	if msg.Header.Response {
+	// Only respond to queries (QR=0).
+	if msg.Response {
 		return
 	}
 
@@ -176,49 +184,57 @@ func (a *MDNSAdvertiser) handleQuery(data []byte, remoteAddr net.Addr, verbose b
 		}
 	}
 
-	mcastDst := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: 5353}
+	// 224.0.0.251:5353 is the standard mDNS multicast group (RFC 6762).
+	mcastDst := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251), Port: mdnsMcastPort} //nolint:mnd // standard mDNS group
 
 	for i := range msg.Questions {
-		responses := a.buildResponses(&msg.Questions[i])
+		a.answerQuestion(&msg.Questions[i], remoteAddr, mcastDst, verbose)
+	}
+}
 
-		// RFC 6762 §5.4: If the QU (unicast-response) bit is set (top bit of
-		// question class), respond unicast to the querier. Otherwise, respond
-		// to the multicast group so all listeners on the network see the reply.
-		unicast := msg.Questions[i].Class&(1<<15) != 0
+// answerQuestion builds and sends the responses for a single question.
+func (a *MDNSAdvertiser) answerQuestion(question *dnsmessage.Question, remoteAddr net.Addr, mcastDst *net.UDPAddr, verbose bool) {
+	responses := a.buildResponses(question)
 
-		for _, response := range responses {
-			packed, err := response.Pack()
-			if err != nil {
-				if verbose {
-					log.Printf("mDNS advertise: failed to pack response: %v", err)
-				}
-				continue
+	// RFC 6762 §5.4: if the QU (unicast-response) bit is set (top bit of the
+	// question class), respond unicast to the querier; otherwise respond to the
+	// multicast group so all listeners on the network see the reply.
+	unicast := question.Class&(1<<15) != 0
+
+	for _, response := range responses {
+		packed, err := response.Pack()
+		if err != nil {
+			if verbose {
+				log.Printf("mDNS advertise: failed to pack response: %v", err)
 			}
-
-			if unicast {
-				if verbose {
-					log.Printf("mDNS advertise: SEND unicast response to %s (%d bytes)", remoteAddr, len(packed))
-				}
-				if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil && verbose {
-					log.Printf("mDNS advertise: failed to send unicast response: %v", err)
-				}
-			} else {
-				// Use ipv4.PacketConn for multicast send — this ensures the
-				// packet goes out on the correct interface via SetMulticastInterface.
-				var cm *ipv4.ControlMessage
-				if a.iface != nil {
-					cm = &ipv4.ControlMessage{IfIndex: a.iface.Index}
-				}
-				if verbose {
-					log.Printf("mDNS advertise: SEND multicast response to %s (%d bytes, iface=%v)", mcastDst, len(packed), a.iface)
-				}
-				if _, err := a.pconn.WriteTo(packed, cm, mcastDst); err != nil {
-					if verbose {
-						log.Printf("mDNS advertise: FAILED to send multicast response: %v", err)
-					}
-				}
-			}
+			continue
 		}
+		a.sendResponse(packed, unicast, remoteAddr, mcastDst, verbose)
+	}
+}
+
+// sendResponse sends one packed response either unicast to the querier or to the
+// mDNS multicast group (via ipv4.PacketConn, so it exits the correct interface).
+func (a *MDNSAdvertiser) sendResponse(packed []byte, unicast bool, remoteAddr net.Addr, mcastDst *net.UDPAddr, verbose bool) {
+	if unicast {
+		if verbose {
+			log.Printf("mDNS advertise: SEND unicast response to %s (%d bytes)", remoteAddr, len(packed))
+		}
+		if _, err := a.conn.WriteTo(packed, remoteAddr); err != nil && verbose {
+			log.Printf("mDNS advertise: failed to send unicast response: %v", err)
+		}
+		return
+	}
+
+	var cm *ipv4.ControlMessage
+	if a.iface != nil {
+		cm = &ipv4.ControlMessage{IfIndex: a.iface.Index}
+	}
+	if verbose {
+		log.Printf("mDNS advertise: SEND multicast response to %s (%d bytes, iface=%v)", mcastDst, len(packed), a.iface)
+	}
+	if _, err := a.pconn.WriteTo(packed, cm, mcastDst); err != nil && verbose {
+		log.Printf("mDNS advertise: FAILED to send multicast response: %v", err)
 	}
 }
 
@@ -239,27 +255,27 @@ func allServiceTypes() []serviceType {
 
 // buildResponses creates mDNS responses for a matching query. Returns nil if no match.
 func (a *MDNSAdvertiser) buildResponses(question *dnsmessage.Question) []*dnsmessage.Message {
-	qName := strings.ToLower(question.Name.String())
+	qName := question.Name.String()
 
-	// A record for pentameter.local
-	if qName == strings.ToLower(pentameterHostname) && question.Type == dnsmessage.TypeA {
-		return []*dnsmessage.Message{a.buildAResponse(question.Name)}
+	// A record for pentameter.local.
+	if strings.EqualFold(qName, pentameterHostname) && question.Type == dnsmessage.TypeA {
+		return []*dnsmessage.Message{a.buildAResponse(&question.Name)}
 	}
 
-	// DNS-SD service type enumeration (RFC 6763 §9)
-	if qName == strings.ToLower(dnsSDServiceName) && question.Type == dnsmessage.TypePTR {
+	// DNS-SD service type enumeration (RFC 6763 §9).
+	if strings.EqualFold(qName, dnsSDServiceName) && question.Type == dnsmessage.TypePTR {
 		return a.buildServiceEnumResponses()
 	}
 
-	// Check each service type for PTR/SRV/TXT queries
+	// Check each service type for PTR/SRV/TXT queries.
 	for _, svc := range allServiceTypes() {
-		if qName == strings.ToLower(svc.service) && question.Type == dnsmessage.TypePTR {
+		if strings.EqualFold(qName, svc.service) && question.Type == dnsmessage.TypePTR {
 			return []*dnsmessage.Message{a.buildPTRResponse(svc.service, svc.instance)}
 		}
-		if qName == strings.ToLower(svc.instance) && question.Type == dnsmessage.TypeSRV {
+		if strings.EqualFold(qName, svc.instance) && question.Type == dnsmessage.TypeSRV {
 			return []*dnsmessage.Message{a.buildSRVResponse(svc.instance)}
 		}
-		if qName == strings.ToLower(svc.instance) && question.Type == dnsmessage.TypeTXT {
+		if strings.EqualFold(qName, svc.instance) && question.Type == dnsmessage.TypeTXT {
 			return []*dnsmessage.Message{a.buildTXTResponse(svc.instance)}
 		}
 	}
@@ -268,7 +284,7 @@ func (a *MDNSAdvertiser) buildResponses(question *dnsmessage.Question) []*dnsmes
 }
 
 // buildAResponse creates a response with the A record for pentameter.local.
-func (a *MDNSAdvertiser) buildAResponse(name dnsmessage.Name) *dnsmessage.Message {
+func (a *MDNSAdvertiser) buildAResponse(name *dnsmessage.Name) *dnsmessage.Message {
 	var aRecord [4]byte
 	copy(aRecord[:], a.ip.To4())
 
@@ -279,7 +295,7 @@ func (a *MDNSAdvertiser) buildAResponse(name dnsmessage.Name) *dnsmessage.Messag
 		},
 		Answers: []dnsmessage.Resource{{
 			Header: dnsmessage.ResourceHeader{
-				Name:  name,
+				Name:  *name,
 				Type:  dnsmessage.TypeA,
 				Class: dnsmessage.ClassINET,
 				TTL:   mdnsTTL,
@@ -292,8 +308,9 @@ func (a *MDNSAdvertiser) buildAResponse(name dnsmessage.Name) *dnsmessage.Messag
 // buildServiceEnumResponses creates PTR responses for DNS-SD service type enumeration (RFC 6763 §9).
 // Returns one response per service type so browsers can discover all advertised services.
 func (a *MDNSAdvertiser) buildServiceEnumResponses() []*dnsmessage.Message {
-	var responses []*dnsmessage.Message
-	for _, svc := range allServiceTypes() {
+	services := allServiceTypes()
+	responses := make([]*dnsmessage.Message, 0, len(services))
+	for _, svc := range services {
 		responses = append(responses, &dnsmessage.Message{
 			Header: dnsmessage.Header{
 				Response:      true,
@@ -388,7 +405,7 @@ func (a *MDNSAdvertiser) buildTXTResponse(instance string) *dnsmessage.Message {
 			},
 			Body: &dnsmessage.TXTResource{
 				TXT: []string{
-					"path=/metrics",
+					txtPathMetrics,
 					"version=" + version,
 				},
 			},

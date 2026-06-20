@@ -121,8 +121,8 @@ func TestProcessResponseInvalidData(t *testing.T) {
 func TestProcessResponseValidButNoPentair(t *testing.T) {
 	// Create a valid DNS response without pentair.local
 	var msg dnsmessage.Message
-	msg.Header.Response = true
-	msg.Header.Authoritative = true
+	msg.Response = true
+	msg.Authoritative = true
 	msg.Answers = []dnsmessage.Resource{
 		{
 			Header: dnsmessage.ResourceHeader{
@@ -157,8 +157,8 @@ func TestProcessResponseValidButNoPentair(t *testing.T) {
 func TestProcessResponseWithPentairIP(t *testing.T) {
 	// Create a valid DNS response with pentair.local
 	var msg dnsmessage.Message
-	msg.Header.Response = true
-	msg.Header.Authoritative = true
+	msg.Response = true
+	msg.Authoritative = true
 	msg.Answers = []dnsmessage.Resource{
 		{
 			Header: dnsmessage.ResourceHeader{

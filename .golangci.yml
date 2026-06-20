@@ -181,6 +181,7 @@ linters:
           - gocyclo
           - mnd
           - nestif
+          - prealloc
           - varnamelen
         path: _test\.go
       - linters:
