@@ -172,6 +172,23 @@ func (c *Client) Do(req Request) (*Response, error) {
 	return c.roundTrip("do", req)
 }
 
+// ReadMessage reads the next message from the connection as a generic map,
+// without filtering. Listen-style consumers loop on this to observe unsolicited
+// push notifications. Blocks until a message arrives or the connection errors.
+func (c *Client) ReadMessage() (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	_ = c.conn.SetReadDeadline(time.Time{}) // block until a message arrives
+	var msg map[string]any
+	if err := c.conn.ReadJSON(&msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
 // DoRaw runs a request expressed as a generic map and returns the matching
 // response as a generic map. Used for GetConfiguration, whose response envelope
 // ("answer") differs from the standard objectList shape. A fresh messageID is
