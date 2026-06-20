@@ -123,7 +123,7 @@ check-gofumpt:
 lint:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run
 
@@ -131,10 +131,10 @@ lint:
 lint-enhanced:
 	@command -v golangci-lint >/dev/null 2>&1 || { \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run \
-		--enable=asasalint,asciicheck,bidichk,bodyclose,containedctx,contextcheck,cyclop,decorder,dogsled,dupl,durationcheck,errcheck,errchkjson,errname,errorlint,exhaustive,copyloopvar,forbidigo,forcetypeassert,funlen,ginkgolinter,gocheckcompilerdirectives,gochecknoinits,gocognit,goconst,gocritic,gocyclo,godot,godox,gofmt,gofumpt,goheader,goimports,mnd,gomoddirectives,gomodguard,goprintffuncname,gosec,gosimple,gosmopolitan,govet,grouper,ineffassign,interfacebloat,lll,loggercheck,maintidx,makezero,misspell,nakedret,nestif,nilerr,nilnil,noctx,nolintlint,nonamedreturns,nosprintfhostport,prealloc,predeclared,promlinter,reassign,revive,rowserrcheck,sqlclosecheck,staticcheck,stylecheck,tagalign,usetesting,testableexamples,testpackage,thelper,tparallel,typecheck,unconvert,unparam,unused,usestdlibvars,varnamelen,wastedassign,whitespace,wrapcheck,zerologlint
+		--enable=asasalint,asciicheck,bidichk,bodyclose,containedctx,contextcheck,cyclop,decorder,dogsled,dupl,durationcheck,errcheck,errchkjson,errname,errorlint,exhaustive,copyloopvar,forbidigo,forcetypeassert,funlen,ginkgolinter,gocheckcompilerdirectives,gochecknoinits,gocognit,goconst,gocritic,gocyclo,godot,godox,goheader,mnd,gomoddirectives,gomodguard,goprintffuncname,gosec,gosmopolitan,govet,grouper,ineffassign,interfacebloat,lll,loggercheck,maintidx,makezero,misspell,nakedret,nestif,nilerr,nilnil,noctx,nolintlint,nonamedreturns,nosprintfhostport,prealloc,predeclared,promlinter,reassign,revive,rowserrcheck,sqlclosecheck,staticcheck,tagalign,usetesting,testableexamples,testpackage,thelper,tparallel,unconvert,unparam,unused,usestdlibvars,varnamelen,wastedassign,whitespace,wrapcheck,zerologlint
 
 # Check cyclomatic complexity
 cyclo:

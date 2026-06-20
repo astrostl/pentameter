@@ -47,14 +47,14 @@ func New(host, port string) *Client {
 
 // Connect dials once. Use ConnectWithRetry for backoff.
 func (c *Client) Connect(ctx context.Context) error {
-	u, err := url.Parse(c.url)
+	parsedURL, err := url.Parse(c.url)
 	if err != nil {
 		return fmt.Errorf("parse url %q: %w", c.url, err)
 	}
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = handshakeTimeout
 
-	conn, resp, err := dialer.DialContext(ctx, u.String(), nil)
+	conn, resp, err := dialer.DialContext(ctx, parsedURL.String(), nil)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
 	}
@@ -195,7 +195,7 @@ func (c *Client) ReadMessage() (map[string]any, error) {
 	_ = c.conn.SetReadDeadline(time.Time{}) // block until a message arrives
 	var msg map[string]any
 	if err := c.conn.ReadJSON(&msg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read message: %w", err)
 	}
 	return msg, nil
 }

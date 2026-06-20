@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -30,6 +31,10 @@ import (
 const (
 	hbReconnectMinDelay = 2 * time.Second
 	hbReconnectMaxDelay = 30 * time.Second
+
+	hbCmdQueueSize = 32          // buffered set-command channel
+	hbStdinInitBuf = 64 * 1024   // initial stdin scanner buffer
+	hbStdinMaxBuf  = 1024 * 1024 // max stdin line length
 )
 
 type hbAccessory struct {
@@ -69,6 +74,7 @@ func (e *hbEmitter) ready() { e.send(map[string]string{"t": "ready"}) }
 func (e *hbEmitter) accessories(items []hbAccessory) {
 	e.send(map[string]any{"t": "accessories", "items": items})
 }
+
 func (e *hbEmitter) state(id string, on bool) {
 	e.send(map[string]any{"t": "state", "id": id, "on": on})
 }
@@ -80,38 +86,22 @@ func runHomebridge(ip, port string, pollInterval time.Duration) {
 	defer stop()
 
 	out := newHBEmitter()
-	cmds := make(chan hbSet, 32)
+	cmds := make(chan hbSet, hbCmdQueueSize)
 	go hbReadStdin(ctx, cmds)
 
 	log.Printf("[homebridge] starting (poll=%v, configured ip=%q)", pollInterval, ip)
 
 	delay := hbReconnectMinDelay
 	for ctx.Err() == nil {
-		target := ip
-		if target == "" {
-			discovered, err := DiscoverIntelliCenter(false)
-			if err != nil {
-				log.Printf("[homebridge] discovery failed: %v (retry in %s)", err, delay)
-				if !hbSleep(ctx, delay) {
-					break
-				}
-				delay = hbNextDelay(delay)
-				continue
-			}
-			log.Printf("[homebridge] discovered IntelliCenter at %s", discovered)
-			target = discovered
-		}
-
-		client := intellicenter.New(target, port)
-		if err := client.Connect(ctx); err != nil {
-			log.Printf("[homebridge] connect failed: %v (retry in %s)", err, delay)
+		client, err := hbDial(ctx, ip, port)
+		if err != nil {
+			log.Printf("[homebridge] %v (retry in %s)", err, delay)
 			if !hbSleep(ctx, delay) {
 				break
 			}
 			delay = hbNextDelay(delay)
 			continue
 		}
-		log.Printf("[homebridge] connected to %s:%s", target, port)
 		delay = hbReconnectMinDelay
 
 		if err := hbServe(ctx, client, out, cmds, pollInterval); err != nil {
@@ -123,6 +113,26 @@ func runHomebridge(ip, port string, pollInterval time.Duration) {
 		}
 	}
 	log.Printf("[homebridge] shutting down")
+}
+
+// hbDial resolves the target (auto-discovering when ip is empty) and returns a
+// connected client.
+func hbDial(ctx context.Context, ip, port string) (*intellicenter.Client, error) {
+	target := ip
+	if target == "" {
+		discovered, err := DiscoverIntelliCenter(false)
+		if err != nil {
+			return nil, fmt.Errorf("discovery failed: %w", err)
+		}
+		log.Printf("[homebridge] discovered IntelliCenter at %s", discovered)
+		target = discovered
+	}
+	client := intellicenter.New(target, port)
+	if err := client.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connect failed: %w", err)
+	}
+	log.Printf("[homebridge] connected to %s:%s", target, port)
+	return client, nil
 }
 
 // hbServe runs one connected session: discover circuits, emit accessories, then
@@ -151,13 +161,7 @@ func hbServe(ctx context.Context, client *intellicenter.Client, out *hbEmitter, 
 		case <-ctx.Done():
 			return nil
 		case cmd := <-cmds:
-			if cmd.T != "set" {
-				continue
-			}
-			if err := client.SetCircuit(cmd.ID, cmd.On); err != nil {
-				return err
-			}
-			if err := hbPoll(client, out, state); err != nil {
+			if err := hbHandleSet(client, out, state, cmd); err != nil {
 				return err
 			}
 		case <-ticker.C:
@@ -166,6 +170,18 @@ func hbServe(ctx context.Context, client *intellicenter.Client, out *hbEmitter, 
 			}
 		}
 	}
+}
+
+// hbHandleSet applies a set command then re-polls so HomeKit reflects the
+// device's real state.
+func hbHandleSet(client *intellicenter.Client, out *hbEmitter, state map[string]bool, cmd hbSet) error {
+	if cmd.T != "set" {
+		return nil
+	}
+	if err := client.SetCircuit(cmd.ID, cmd.On); err != nil {
+		return err
+	}
+	return hbPoll(client, out, state)
 }
 
 // hbPoll queries current circuit state and emits an update for anything changed.
@@ -187,7 +203,7 @@ func hbPoll(client *intellicenter.Client, out *hbEmitter, state map[string]bool)
 // shim (our parent) is gone, so exit rather than run orphaned.
 func hbReadStdin(ctx context.Context, cmds chan<- hbSet) {
 	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, hbStdinInitBuf), hbStdinMaxBuf)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {

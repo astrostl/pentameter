@@ -1,96 +1,6 @@
-linters-settings:
-  dupl:
-    threshold: 100
-  funlen:
-    lines: 100
-    statements: 50
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(pentameter)
-  goconst:
-    min-len: 2
-    min-occurrences: 2
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
-  gocyclo:
-    min-complexity: 15  # Quality check requirement
-  cyclop:
-    max-complexity: 15  # Quality check requirement
-  goimports:
-    local-prefixes: pentameter
-  mnd:
-    settings:
-      mnd:
-        checks: argument,case,condition,return
-        ignored-functions:
-          - fmt.Sprintf
-          - time.Now
-  govet:
-    settings:
-      printf:
-        funcs:
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
-          - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
-  lll:
-    line-length: 160  # Increased for this project
-  misspell:
-    locale: US
-  nolintlint:
-    allow-leading-space: true
-    allow-unused: false
-    require-explanation: false
-    require-specific: false
-  depguard:
-    rules:
-      main:
-        deny:
-          - pkg: "log/slog"
-            desc: "use standard log for now"
-  varnamelen:
-    min-name-length: 2
-    ignore-names:
-      - "i"
-      - "j"
-      - "k"
-      - "t"
-      - "w"
-      - "r"
-      - "id"
-      - "ok"
-      - "err"
-  maintidx:
-    under: 10
-  interfacebloat:
-    max: 8
-  nestif:
-    min-complexity: 5
-  gocognit:
-    min-complexity: 15
-  wrapcheck:
-    ignoreSigs:
-      - fmt.Errorf(
-      - errors.New(
-      - errors.Unwrap(
-      - .Wrap(
-      - .Wrapf(
-
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
     - asasalint
     - asciicheck
@@ -98,6 +8,7 @@ linters:
     - bodyclose
     - containedctx
     - contextcheck
+    - copyloopvar
     - cyclop
     - decorder
     - dogsled
@@ -108,7 +19,6 @@ linters:
     - errname
     - errorlint
     - exhaustive
-    - copyloopvar
     - forbidigo
     - forcetypeassert
     - funlen
@@ -121,16 +31,11 @@ linters:
     - gocyclo
     - godot
     - godox
-    - gofmt
-    - gofumpt
     - goheader
-    - goimports
-    - mnd
     - gomoddirectives
     - gomodguard
     - goprintffuncname
     - gosec
-    - gosimple
     - gosmopolitan
     - govet
     - grouper
@@ -141,6 +46,7 @@ linters:
     - maintidx
     - makezero
     - misspell
+    - mnd
     - nakedret
     - nestif
     - nilerr
@@ -157,65 +63,170 @@ linters:
     - rowserrcheck
     - sqlclosecheck
     - staticcheck
-    - stylecheck
     - tagalign
-    - usetesting
     - testableexamples
     - testpackage
     - thelper
     - tparallel
-    - typecheck
     - unconvert
     - unparam
     - unused
     - usestdlibvars
+    - usetesting
     - varnamelen
     - wastedassign
     - whitespace
     - wrapcheck
     - zerologlint
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - mnd
-        - varnamelen
-        - funlen
-        - gocognit
-        - gocyclo
-        - cyclop
-        - nestif
-    - text: "G114: Use of net/http serve function that has no support for setting timeouts"
-      linters:
-        - gosec
-      source: "http.ListenAndServe.*8080"  # Only exclude for main server startup
-    - text: "response body must be closed"
-      linters:
-        - bodyclose
-      source: "websocket.DefaultDialer.Dial"  # Only exclude for WebSocket connections
-    - text: "use base unit \"celsius\" instead of \"fahrenheit\""  # Project uses Fahrenheit per requirements
-      linters:
-        - promlinter
-    - text: "variable name '.*' is too short"
-      linters:
-        - varnamelen
-      source: "for.*range"  # Short variable names in range loops are acceptable
-    - text: "exported function.*should have comment"
-      linters:
-        - revive
-      source: "func.*main"  # main function doesn't need comment
-    - text: "unused-parameter"
-      linters:
-        - revive
-      source: "func.*Handler"  # HTTP handlers often have unused parameters
-
-run:
-  timeout: 5m
-
-# golangci.com configuration
-# https://github.com/golangci/golangci/wiki/Configuration
-service:
-  golangci-lint-version: 1.54.2 # use the fixed version to not introduce new linters unexpectedly
-  prepare:
-    - echo "here I can run custom commands, but no preparation needed for this repo"
+  settings:
+    cyclop:
+      max-complexity: 15
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: log/slog
+              desc: use standard log for now
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 100
+      statements: 50
+    gocognit:
+      min-complexity: 15
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+        - wrapperFunc
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    gocyclo:
+      min-complexity: 15
+    govet:
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+    interfacebloat:
+      max: 8
+    lll:
+      line-length: 160
+    maintidx:
+      under: 10
+    misspell:
+      locale: US
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - return
+      ignored-functions:
+        - fmt.Sprintf
+        - time.Now
+    nestif:
+      min-complexity: 5
+    nolintlint:
+      require-explanation: false
+      require-specific: false
+      allow-unused: false
+    varnamelen:
+      min-name-length: 2
+      ignore-names:
+        - i
+        - j
+        - k
+        - t
+        - w
+        - r
+        - id
+        - ok
+        - err
+    wrapcheck:
+      ignore-sigs:
+        - fmt.Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - .Wrap(
+        - .Wrapf(
+      # Our own sub-packages are not "external"; wrapcheck targets third-party deps.
+      ignore-package-globs:
+        - github.com/astrostl/pentameter/*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - cyclop
+          - funlen
+          - goconst
+          - gocognit
+          - gocyclo
+          - mnd
+          - nestif
+          - varnamelen
+        path: _test\.go
+      - linters:
+          - gosec
+        text: 'G114: Use of net/http serve function that has no support for setting timeouts'
+        source: http.ListenAndServe.*8080
+      - linters:
+          - bodyclose
+        text: response body must be closed
+        source: websocket.DefaultDialer.Dial
+      - linters:
+          - promlinter
+        text: use base unit "celsius" instead of "fahrenheit"
+      - linters:
+          - varnamelen
+        text: variable name '.*' is too short
+        source: for.*range
+      - linters:
+          - revive
+        text: exported function.*should have comment
+        source: func.*main
+      - linters:
+          - revive
+        text: unused-parameter
+        source: func.*Handler
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(pentameter)
+    goimports:
+      local-prefixes:
+        - pentameter
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

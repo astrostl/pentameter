@@ -4,7 +4,7 @@ import "strings"
 
 // HeatStatus maps a body's heat mode + current/target temps to a thermal status
 // (off/heating/idle/cooling). Ported from pentameter's calculateHeaterStatus.
-func (b Body) HeatStatus() int {
+func (b *Body) HeatStatus() int {
 	switch b.HeatMode {
 	case htModeOff:
 		// Heater assigned but off: idle if within setpoints, else off.

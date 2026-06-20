@@ -326,7 +326,7 @@ func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interv
 	for {
 		select {
 		case <-ctx.Done():
-			_ = poller.Close()
+			poller.Close()
 			return
 		case <-ticker.C:
 			pm.mu.Lock()
@@ -1239,16 +1239,13 @@ func (pm *PoolMonitor) EnsureConnected(ctx context.Context) error {
 	if pm.ic.Connected() {
 		log.Println("Connection unhealthy, attempting to reconnect...")
 	}
-	if err := pm.Close(); err != nil {
-		log.Printf("Warning: failed to close connection: %v", err)
-	}
+	pm.Close()
 	return pm.Connect(ctx)
 }
 
-func (pm *PoolMonitor) Close() error {
+func (pm *PoolMonitor) Close() {
 	pm.connected = false
 	pm.ic.Close()
-	return nil
 }
 
 func (pm *PoolMonitor) StartTemperaturePolling(ctx context.Context, interval time.Duration) {
@@ -1933,11 +1930,7 @@ func main() {
 	if err := monitor.Connect(ctx); err != nil {
 		log.Fatalf("Failed to connect to IntelliCenter: %v", err)
 	}
-	defer func() {
-		if err := monitor.Close(); err != nil {
-			log.Printf("Error closing monitor: %v", err)
-		}
-	}()
+	defer monitor.Close()
 
 	// Start mDNS advertisement so pentameter can be discovered on the network
 	adv, err := StartMDNSAdvertiser(cfg.httpPort, false)

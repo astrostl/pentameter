@@ -1,4 +1,4 @@
-package intellicenter
+package intellicenter //nolint:testpackage // white-box: tests exercise unexported protocol types and the mock server
 
 import (
 	"context"
@@ -20,6 +20,7 @@ type fakeIC struct {
 }
 
 func newFakeIC(t *testing.T) *fakeIC {
+	t.Helper()
 	f := &fakeIC{t: t}
 	up := websocket.Upgrader{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

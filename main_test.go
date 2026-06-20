@@ -950,10 +950,7 @@ func TestLogPumpUpdate(_ *testing.T) {
 func TestCloseWithoutConnection(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 
-	err := poolMonitor.Close()
-	if err != nil {
-		t.Errorf("Close should not error when no connection exists: %v", err)
-	}
+	poolMonitor.Close()
 
 	if poolMonitor.connected {
 		t.Error("Should not be marked as connected after close")

@@ -129,3 +129,28 @@ const (
 
 	statusOn = "ON"
 )
+
+// Protocol command names, param keys, and values used across queries/writes.
+const (
+	cmdGetParamList = "GetParamList"
+	cmdSetParamList = "SetParamList"
+
+	keyStatus = "STATUS"
+	keyLoTmp  = "LOTMP"
+	keyHiTmp  = "HITMP"
+	keyFreeze = "FREEZE"
+	keyProbe  = "PROBE"
+	keySName  = "SNAME"
+	keyObjTyp = "OBJTYP"
+	keySubTyp = "SUBTYP"
+	keyTemp   = "TEMP"
+	keyHTMode = "HTMODE"
+	keyHTSrc  = "HTSRC"
+	keyRPM    = "RPM"
+	keyWatts  = "WATTS"
+	keyGPM    = "GPM"
+
+	condSense = "OBJTYP=SENSE"
+
+	valueOff = "OFF"
+)

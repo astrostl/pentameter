@@ -13,7 +13,7 @@ func (c *Client) SetParams(objnam string, params map[string]string) error {
 		return fmt.Errorf("SetParams: objnam and params required")
 	}
 	_, err := c.roundTrip("set", Request{
-		Command:    "SetParamList",
+		Command:    cmdSetParamList,
 		ObjectList: []Object{{ObjName: objnam, Params: params}},
 	})
 	return err
@@ -21,20 +21,20 @@ func (c *Client) SetParams(objnam string, params map[string]string) error {
 
 // SetCircuit turns a circuit/feature/body on or off (STATUS ON/OFF).
 func (c *Client) SetCircuit(objnam string, on bool) error {
-	status := "OFF"
+	status := valueOff
 	if on {
 		status = statusOn
 	}
-	return c.SetParams(objnam, map[string]string{"STATUS": status})
+	return c.SetParams(objnam, map[string]string{keyStatus: status})
 }
 
 // SetHeatSetpoint sets a body's heat (LOTMP) setpoint, in IntelliCenter's native
 // units (Fahrenheit). Pass the value as an integer-valued string upstream.
 func (c *Client) SetHeatSetpoint(bodyObjnam string, lowTempF int) error {
-	return c.SetParams(bodyObjnam, map[string]string{"LOTMP": fmt.Sprintf("%d", lowTempF)})
+	return c.SetParams(bodyObjnam, map[string]string{keyLoTmp: fmt.Sprintf("%d", lowTempF)})
 }
 
 // SetCoolSetpoint sets a body's cool (HITMP) setpoint for heat-pump bodies.
 func (c *Client) SetCoolSetpoint(bodyObjnam string, highTempF int) error {
-	return c.SetParams(bodyObjnam, map[string]string{"HITMP": fmt.Sprintf("%d", highTempF)})
+	return c.SetParams(bodyObjnam, map[string]string{keyHiTmp: fmt.Sprintf("%d", highTempF)})
 }
