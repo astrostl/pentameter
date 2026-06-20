@@ -163,3 +163,44 @@ func (c *Client) roundTrip(prefix string, req Request) (*Response, error) {
 	}
 	return nil, fmt.Errorf("no matching response for %s after %d messages", req.MessageID, maxUnsolicitedMessages)
 }
+
+// Do runs an arbitrary typed request through the shared connection and returns
+// the matching response (skipping unsolicited pushes). A fresh messageID is
+// assigned internally. Exposed so other consumers (e.g. the metrics monitor)
+// can share this transport instead of duplicating it.
+func (c *Client) Do(req Request) (*Response, error) {
+	return c.roundTrip("do", req)
+}
+
+// DoRaw runs a request expressed as a generic map and returns the matching
+// response as a generic map. Used for GetConfiguration, whose response envelope
+// ("answer") differs from the standard objectList shape. A fresh messageID is
+// assigned internally.
+func (c *Client) DoRaw(req map[string]any) (map[string]any, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	mid := c.nextMessageID("raw")
+	req["messageID"] = mid
+
+	if err := c.conn.WriteJSON(req); err != nil {
+		return nil, fmt.Errorf("write raw %v: %w", req["command"], err)
+	}
+	if err := c.conn.SetReadDeadline(time.Now().Add(responseReadTimeout)); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
+	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
+
+	for range maxUnsolicitedMessages {
+		var resp map[string]any
+		if err := c.conn.ReadJSON(&resp); err != nil {
+			return nil, fmt.Errorf("read raw response: %w", err)
+		}
+		if id, ok := resp["messageID"].(string); ok && id == mid {
+			return resp, nil
+		}
+	}
+	return nil, fmt.Errorf("no matching raw response for %s", mid)
+}
