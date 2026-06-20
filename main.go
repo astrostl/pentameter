@@ -2149,6 +2149,7 @@ type appConfig struct {
 	intelliCenterPort string
 	httpPort          string
 	listenMode        bool
+	homebridge        bool
 	pollInterval      time.Duration
 }
 
@@ -2157,6 +2158,7 @@ type commandLineFlags struct {
 	intelliCenterPort *string
 	httpPort          *string
 	listenMode        *bool
+	homebridge        *bool
 	pollInterval      *int
 	showVersion       *bool
 	discoverOnly      *bool
@@ -2172,6 +2174,8 @@ func defineFlags() *commandLineFlags {
 			"HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)"),
 		listenMode: flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
 			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
+		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
+			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
@@ -2241,13 +2245,20 @@ func parseCommandLineFlags() *appConfig {
 
 	handleEarlyExitFlags(flags)
 
-	return &appConfig{
-		intelliCenterIP:   resolveIntelliCenterIP(*flags.intelliCenterIP),
+	cfg := &appConfig{
+		intelliCenterIP:   *flags.intelliCenterIP,
 		intelliCenterPort: *flags.intelliCenterPort,
 		httpPort:          *flags.httpPort,
 		listenMode:        *flags.listenMode,
+		homebridge:        *flags.homebridge,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
 	}
+	// Homebridge mode runs its own resilient discovery loop; other modes resolve
+	// the IP here (which blocks on discovery and Fatals on failure).
+	if !cfg.homebridge {
+		cfg.intelliCenterIP = resolveIntelliCenterIP(cfg.intelliCenterIP)
+	}
+	return cfg
 }
 
 func logStartupMessage(cfg *appConfig) {
@@ -2292,6 +2303,12 @@ func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, htt
 
 func main() {
 	cfg := parseCommandLineFlags()
+
+	if cfg.homebridge {
+		runHomebridge(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
+		return
+	}
+
 	logStartupMessage(cfg)
 
 	registry := createPrometheusRegistry()
