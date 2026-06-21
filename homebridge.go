@@ -38,13 +38,11 @@ const (
 
 	hbKindSwitch     = "switch"      // HomeKit accessory kind for a circuit
 	hbKindThermostat = "thermostat"  // HomeKit accessory kind for a body+heater
-	hbKindFan        = "fan"         // HomeKit accessory kind for a pump (read-only Fan)
 	hbKindLight      = "lightsensor" // read-only LightSensor: a raw metric encoded as lux
 	hbKindOccupancy  = "occupancy"   // read-only OccupancySensor: a boolean system state
 	hbMsgReady       = "ready"
 	hbMsgAccess      = "accessories"
 	hbMsgState       = "state"
-	hbMsgFState      = "fstate" // sidecar -> shim pump (fan) state
 	hbMsgLState      = "lstate" // sidecar -> shim light-sensor (lux) value
 	hbMsgSet         = "set"
 	hbMsgTSet        = "tset" // shim -> sidecar thermostat command
@@ -56,11 +54,7 @@ const (
 	hbSensorRPM     = "rpm"
 	hbSensorWatts   = "watts"
 	hbSensorGPM     = "gpm"
-
-	// hbPumpMaxRPM is the conventional Pentair VSP top speed, used only to scale
-	// RPM onto HomeKit's 0-100 RotationSpeed (a Fan has no raw-RPM characteristic).
-	hbPumpMaxRPM = 3450.0
-	hbPctFull    = 100
+	hbSensorRun     = "run" // suffix for a pump's "running" occupancy sensor
 
 	hbModeOn = "on" // tset mode: assign the body's heater (vs "off" = no heater)
 
@@ -88,12 +82,6 @@ type hbAccessory struct {
 	CoolC   *float64 `json:"coolC,omitempty"` // cool setpoint (HITMP), if CanCool
 	CanCool bool     `json:"canCool,omitempty"`
 	State   string   `json:"state,omitempty"` // off | idle | heat | cool
-
-	// Pump (fan) fields (kind=="fan"). Pct is RPM scaled to HomeKit's 0-100
-	// RotationSpeed; RPM is the raw value (logging / future use). Pointers so a
-	// real 0 (pump off) isn't confused with "absent".
-	Pct *int `json:"pct,omitempty"`
-	RPM *int `json:"rpm,omitempty"`
 
 	// Light-sensor field (kind=="lightsensor"). The raw metric value, which the
 	// shim encodes as lux (HomeKit has no read-only numeric tile; lux is the
@@ -141,12 +129,6 @@ func (e *hbEmitter) accessories(items []hbAccessory) {
 
 func (e *hbEmitter) state(id string, on bool) {
 	e.send(map[string]any{"t": hbMsgState, hbFieldID: id, hbFieldOn: on})
-}
-
-// fstate pushes a pump's live values: on/off and RPM (both the 0-100 scaled
-// RotationSpeed and the raw RPM). Pumps are poll-only, so this arrives on poll.
-func (e *hbEmitter) fstate(id string, on bool, pct, rpm int) {
-	e.send(map[string]any{"t": hbMsgFState, hbFieldID: id, hbFieldOn: on, "pct": pct, "rpm": rpm})
 }
 
 // lstate pushes a light-sensor's raw value (the shim encodes it as lux).
@@ -234,13 +216,33 @@ func (p *hbPublisher) isPublished() bool {
 }
 
 // hbAllItems is the full announced accessory list: circuits (Features),
-// thermostats, pump fans, pump light-sensors, then the freeze sensor — each
-// group already sorted by ID for stable output.
+// thermostats, pump light-sensors, pump "running" sensors, then the freeze
+// sensor — each group already sorted by ID for stable output.
 func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
 	items := append(hbCircuitItems(snap), hbThermostatItems(snap)...)
-	items = append(items, hbPumpItems(snap)...)
 	items = append(items, hbPumpSensorItems(snap)...)
+	items = append(items, hbPumpRunningItems(snap)...)
 	return append(items, hbFreezeItems(snap)...)
+}
+
+// hbPumpRunningItems builds a read-only OccupancySensor per pump reporting
+// whether it's running (RPM > 0). Unlike the metric LightSensors (a readout),
+// an occupancy sensor can drive HomeKit automations/notifications on pump
+// start/stop. IDs are suffixed so they don't collide with the metric sensors.
+func hbPumpRunningItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Pumps))
+	for id := range snap.Pumps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]hbAccessory, 0, len(ids))
+	for _, id := range ids {
+		pump := snap.Pumps[id]
+		items = append(items, hbAccessory{
+			ID: pump.ID + "." + hbSensorRun, Name: pump.Name + " Running", Kind: hbKindOccupancy, On: pump.On,
+		})
+	}
+	return items
 }
 
 // hbPumpSensorItems builds read-only LightSensors carrying each pump's raw
@@ -288,44 +290,6 @@ func hbFreezeItems(snap intellicenter.Snapshot) []hbAccessory {
 		}
 	}
 	return nil
-}
-
-// hbPumpItems builds one read-only Fan per pump, sorted by ID. RotationSpeed
-// carries RPM scaled to 0-100 (HomeKit has no raw-RPM characteristic); the shim
-// exposes the Fan read-only so it can't be toggled or dragged.
-func hbPumpItems(snap intellicenter.Snapshot) []hbAccessory {
-	ids := make([]string, 0, len(snap.Pumps))
-	for id := range snap.Pumps {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	items := make([]hbAccessory, 0, len(ids))
-	for _, id := range ids {
-		pump := snap.Pumps[id]
-		pct := rpmToPct(pump.RPM, pump.MaxRPM)
-		rpm := int(math.Round(pump.RPM))
-		items = append(items, hbAccessory{
-			ID: pump.ID, Name: pump.Name, Kind: hbKindFan, On: pump.On, Pct: &pct, RPM: &rpm,
-		})
-	}
-	return items
-}
-
-// rpmToPct scales a pump RPM onto HomeKit's 0-100 RotationSpeed as a percentage
-// of the pump's configured maximum (MAX). Falls back to the conventional VSP top
-// speed if the controller didn't report a max. Clamped to [0,100].
-func rpmToPct(rpm, maxRPM float64) int {
-	if rpm <= 0 {
-		return 0
-	}
-	if maxRPM <= 0 {
-		maxRPM = hbPumpMaxRPM
-	}
-	pct := int(math.Round(rpm / maxRPM * hbPctFull))
-	if pct > hbPctFull {
-		return hbPctFull
-	}
-	return pct
 }
 
 // accessorySignature captures the membership-relevant identity of the accessory
@@ -383,14 +347,15 @@ func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *
 			t := thermostatStateFromBody(ch.Body)
 			out.tstate(&t)
 		case ch.Pump != nil:
-			// Pump changed (poll-only) → refresh its Fan and its metric LightSensors.
-			p := ch.Pump
-			out.fstate(p.ID, p.On, rpmToPct(p.RPM, p.MaxRPM), int(math.Round(p.RPM)))
-			out.lstate(p.ID+"."+hbSensorRPM, p.RPM)
-			out.lstate(p.ID+"."+hbSensorWatts, p.Watts)
-			if p.MaxFlow > 0 {
-				out.lstate(p.ID+"."+hbSensorGPM, p.GPM)
+			// Pump changed (poll-only) → refresh its metric LightSensors and its
+			// "running" occupancy sensor (which rides the circuit state message).
+			pump := ch.Pump
+			out.lstate(pump.ID+"."+hbSensorRPM, pump.RPM)
+			out.lstate(pump.ID+"."+hbSensorWatts, pump.Watts)
+			if pump.MaxFlow > 0 {
+				out.lstate(pump.ID+"."+hbSensorGPM, pump.GPM)
 			}
+			out.state(pump.ID+"."+hbSensorRun, pump.On)
 		}
 	}
 }
