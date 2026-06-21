@@ -200,6 +200,36 @@ func TestSetHeatControls(t *testing.T) {
 	}
 }
 
+func TestPumpFrom(t *testing.T) {
+	// Real-shape params: STATUS is a numeric code (not "ON"), power is under PWR
+	// (WATTS is a garbage echo), MAX is the configured top speed.
+	running := pumpFrom("PMP01", map[string]string{
+		keySName: "VS", keyStatus: "10", keyRPM: "1800", keyMax: "3450",
+		keyPwr: "215", keyWatts: "WATTS", keyGPM: "55",
+	})
+	if !running.On {
+		t.Error("pump at 1800 RPM should be On (STATUS is a code, not \"ON\")")
+	}
+	if running.RPM != 1800 || running.MaxRPM != 3450 {
+		t.Errorf("rpm/max wrong: %+v", running)
+	}
+	if running.Watts != 215 {
+		t.Errorf("power should come from PWR (215), not the WATTS echo: got %v", running.Watts)
+	}
+
+	// Stopped pump: RPM 0 → not running.
+	stopped := pumpFrom("PMP03", map[string]string{keySName: "Idle", keyRPM: "0", keyMax: "3450"})
+	if stopped.On {
+		t.Error("pump at 0 RPM should be Off")
+	}
+
+	// Fallback: a firmware that populates WATTS instead of PWR.
+	legacy := pumpFrom("PMP09", map[string]string{keyRPM: "2000", keyWatts: "900"})
+	if legacy.Watts != 900 {
+		t.Errorf("should fall back to WATTS when PWR absent: got %v", legacy.Watts)
+	}
+}
+
 func TestShouldShowFeature(t *testing.T) {
 	if !ShouldShowFeature("ABCw") {
 		t.Error("ABCw should be visible")

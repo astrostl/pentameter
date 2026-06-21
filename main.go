@@ -131,7 +131,8 @@ const (
 	keySUBTYP  = "SUBTYP"
 	keyLOTMP   = "LOTMP"
 	keyHITMP   = "HITMP"
-	keyWATTS   = "WATTS"
+	keyWATTS   = "WATTS" // garbage echo on current firmware; real power is keyPWR
+	keyPWR     = "PWR"   // pump real power draw (watts)
 	keySPEED   = "SPEED"
 	keyPARENT  = "PARENT"
 	keyUSE     = "USE"
@@ -579,7 +580,7 @@ func (pm *PoolMonitor) handlePumpPush(obj ObjectData, name string) {
 		log.Printf("PUSH: %s pump error: %v", name, err)
 	} else {
 		log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
-			name, obj.Params[keyRPM], obj.Params["PWR"], obj.Params[keySTATUS])
+			name, obj.Params[keyRPM], obj.Params[keyPWR], obj.Params[keySTATUS])
 	}
 }
 
@@ -1258,7 +1259,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 		ObjectList: []ObjectQuery{
 			{
 				ObjName: objnamIncr,
-				Keys:    []string{keySNAME, keySTATUS, keyRPM, keyWATTS, keyGPM, keySPEED},
+				Keys:    []string{keySNAME, keySTATUS, keyRPM, keyPWR, keyWATTS, keyGPM, keySPEED},
 			},
 		},
 	}

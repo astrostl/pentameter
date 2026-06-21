@@ -100,8 +100,8 @@ type Pump struct {
 	On     bool
 	RPM    float64 // RPM (current speed)
 	MaxRPM float64 // MAX (configured maximum speed)
-	Watts  float64 // WATTS
-	GPM    float64 // GPM
+	Watts  float64 // PWR (real power draw; WATTS key is a garbage echo on current firmware)
+	GPM    float64 // GPM (note: estimated, not measured, when the pump has no flow capability — MAXF=0)
 }
 
 // Heater is a heater (objnam H####).
@@ -176,8 +176,13 @@ const (
 	keyCool   = "COOL"
 	keyRPM    = "RPM"
 	keyMax    = "MAX"
-	keyWatts  = "WATTS"
-	keyGPM    = "GPM"
+	// keyPwr is the pump's real power draw. The intuitive "WATTS" key returns a
+	// garbage echo on current IntelliCenter firmware; PWR holds the actual value
+	// (verified on hardware: VS@1800rpm=215W, VSF@2450rpm=760W). keyWatts is kept
+	// as a fallback for firmwares that may populate it instead.
+	keyPwr   = "PWR"
+	keyWatts = "WATTS"
+	keyGPM   = "GPM"
 
 	condCircuit = "OBJTYP=CIRCUIT"
 	condBody    = "OBJTYP=BODY"

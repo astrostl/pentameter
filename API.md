@@ -278,15 +278,34 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "pump-001",
   "command": "GetParamList", 
   "condition": "OBJTYP=PUMP",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "RPM", "GPM", "WATTS", "SPEED"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "STATUS", "RPM", "MAX", "GPM", "MAXF", "PWR"]}]
 }
 ```
 
 **Response includes:**
-- **STATUS**: "10" = running, other values = stopped
-- **RPM**: Current revolutions per minute  
-- **GPM**: Flow rate in gallons per minute
-- **WATTS**: Power consumption (may have formatting issues)
+- **STATUS**: numeric code — `"10"` = running, other values = stopped. NOT `"ON"`/`"OFF"`
+  (unlike circuits). Derive on/off from `RPM > 0`, which is unambiguous.
+- **RPM**: current revolutions per minute
+- **MAX**: configured maximum speed (RPM). Verified `3450` on VS and VSF pumps.
+- **PWR**: ⚠️ **real power draw in watts — use this, NOT `WATTS`.** The intuitive
+  `WATTS` key returns a garbage echo (the controller returns `{"":"WATTS"}`, i.e.
+  the key name as an empty-keyed value) on current firmware. `PWR` holds the
+  actual value. Verified on hardware: VS @ 1800 RPM = **215 W**, VSF @ 2450 RPM =
+  **760 W** (tracks the pump affinity law, so it is a genuine reading). Prefer
+  `PWR`; fall back to `WATTS` only for firmwares that might populate it instead.
+- **GPM**: flow rate in gallons per minute — ⚠️ **estimated, not measured, when the
+  pump has no flow capability.** A `SUBTYP=SPEED` pump reports `MAXF=0` yet still
+  returns a nonzero GPM (e.g. VS pump: `MAXF=0`, `GPM=55`); that number is a
+  controller estimate. Only trust GPM when `MAXF > 0` (flow-capable VSF pumps).
+- **MAXF**: maximum flow (GPM). `0` means the pump has no flow capability — see GPM caveat above.
+
+**Per-circuit speed programs (PMPCIRC):** each pump has child objects `p<pump><n>`
+(e.g. `p0101`–`p0104` for `PMP01`) mapping a circuit to the speed the pump runs
+when that circuit is the active demand. Keys: `CIRCUIT` (the driven circuit's
+objnam), `SPEED` (RPM), `SELECT` (`RPM` vs `GPM` mode). The pump's **current RPM
+equals the active circuit's programmed SPEED** (highest demand wins, freeze
+protection overrides). Example (VS pump): Spa→1800, Heater→3000, Spa Jets→3400,
+Freeze→2200.
 
 ### Circuit and Feature Status
 
@@ -335,9 +354,10 @@ The `GetParamList` command retrieves current operational data for monitoring.
 
 **Pumps (OBJTYP=PUMP):**
 - **SNAME**: Display name
-- **STATUS**: Running status ("10"=running)
-- **RPM**: Current speed
-- **GPM**: Current flow rate
+- **STATUS**: numeric code ("10"=running); derive on/off from RPM > 0
+- **RPM**: Current speed; **MAX**: configured max speed
+- **PWR**: real power (watts) — NOT the `WATTS` key (garbage echo); see Pump Monitoring above
+- **GPM**: flow rate — estimated unless `MAXF > 0`; see Pump Monitoring above
 
 **Sensors (OBJTYP=SENSE):**
 - **SNAME**: Display name
