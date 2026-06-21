@@ -1840,7 +1840,6 @@ type appConfig struct {
 	httpPort          string
 	listenMode        bool
 	homebridge        bool
-	useEngine         bool
 	autoDiscover      bool // no static IP given → (re)discover via mDNS
 	pollInterval      time.Duration
 }
@@ -1851,7 +1850,6 @@ type commandLineFlags struct {
 	httpPort          *string
 	listenMode        *bool
 	homebridge        *bool
-	useEngine         *bool
 	pollInterval      *int
 	showVersion       *bool
 	discoverOnly      *bool
@@ -1869,8 +1867,6 @@ func defineFlags() *commandLineFlags {
 			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
 			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
-		useEngine: flag.Bool("engine", getEnvOrDefault("PENTAMETER_ENGINE", "false") == trueString,
-			"Drive metrics from the push-based intellicenter.Engine (real-time gauges; opt-in; env: PENTAMETER_ENGINE)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
@@ -1957,14 +1953,13 @@ func parseCommandLineFlags() *appConfig {
 		httpPort:          *flags.httpPort,
 		listenMode:        *flags.listenMode,
 		homebridge:        *flags.homebridge,
-		useEngine:         *flags.useEngine,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
 	}
 	cfg.autoDiscover = cfg.intelliCenterIP == ""
-	// Homebridge mode runs its own resilient discovery loop; the engine paths
-	// rediscover via the engine's Resolve hook. Only the legacy poll/listen paths
-	// resolve the IP here up front (which blocks on discovery and Fatals on failure).
-	if !cfg.homebridge && (!cfg.useEngine || !cfg.autoDiscover) {
+	// All modes now run an intellicenter.Engine, which rediscovers via its Resolve
+	// hook; up-front discovery would only block and Fatal. So resolve here only
+	// when a static IP was given (a passthrough/validation, no discovery).
+	if !cfg.autoDiscover {
 		cfg.intelliCenterIP = resolveIntelliCenterIP(cfg.intelliCenterIP)
 	}
 	return cfg
@@ -2022,44 +2017,14 @@ func main() {
 
 	registry := createPrometheusRegistry()
 
-	// Opt-in: drive metrics/listen from the push-based engine instead of the
-	// legacy poll loops. The default paths below are unchanged.
-	if cfg.useEngine {
-		if cfg.listenMode {
-			runListenEngine(cfg)
-		} else {
-			runMetricsEngine(cfg, registry)
-		}
-		return
-	}
-
-	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.listenMode)
-	ctx := context.Background()
-
-	if err := monitor.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect to IntelliCenter: %v", err)
-	}
-	defer monitor.Close()
-
-	// Start mDNS advertisement so pentameter can be discovered on the network
-	adv, err := StartMDNSAdvertiser(cfg.httpPort, false)
-	if err != nil {
-		log.Printf("Warning: mDNS advertisement disabled: %v", err)
-	} else {
-		defer func() {
-			if err := adv.Close(); err != nil {
-				log.Printf("Error closing mDNS advertiser: %v", err)
-			}
-		}()
-	}
-
+	// Metrics and listen modes are both driven by the push-based
+	// intellicenter.Engine (real-time gauges / events, with the poll as a safety
+	// net). The engine owns connection, reconnect, and mDNS rediscovery.
 	if cfg.listenMode {
-		monitor.StartEventListener(ctx, cfg.pollInterval)
-		return
+		runListenEngine(cfg)
+	} else {
+		runMetricsEngine(cfg, registry)
 	}
-
-	go monitor.StartTemperaturePolling(ctx, cfg.pollInterval)
-	setupHTTPEndpoints(registry, monitor, cfg.httpPort)
 }
 
 func startServer(serverAddr string) {
