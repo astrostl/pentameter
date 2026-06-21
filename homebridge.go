@@ -176,8 +176,67 @@ func runHomebridge(cfg *appConfig) {
 	engine.Resolve = newDiscoveryResolver(cfg)
 
 	log.Printf("[homebridge] starting (poll=%v, configured ip=%q)", cfg.pollInterval, cfg.intelliCenterIP)
-	hbRun(ctx, engine, out, cmds)
+	hbRun(ctx, engine, out, cmds, cfg.metricsPort)
 	log.Printf("[homebridge] shutting down")
+}
+
+// hbMetrics drives Prometheus metrics off the homebridge engine, reusing the
+// metrics-mode interpretation (PoolMonitor.refreshFromEngine). With it, a single
+// homebridge sidecar emits BOTH HomeKit (stdio IPC) and Grafana (HTTP /metrics)
+// from one controller connection. Read-only and on a separate TCP port, so it
+// can't interfere with the IPC channel or with writes.
+type hbMetrics struct {
+	pm    *PoolMonitor
+	mu    sync.Mutex
+	ready bool
+}
+
+// startHBMetrics registers the gauges, serves /metrics, and starts a push-driven
+// recompute. It returns a handle whose onScan does the full poll-cadence refresh.
+func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
+	met := &hbMetrics{pm: NewPoolMonitor("", "", false)}
+	registry := createPrometheusRegistry()
+
+	// Push-driven freshness: recompute (quietly) on every change between polls.
+	// A second engine subscriber, independent of the shim IPC subscriber.
+	changes := engine.Subscribe()
+	go func() {
+		for range changes {
+			met.mu.Lock()
+			r := met.ready
+			met.mu.Unlock()
+			if r {
+				met.recompute(engine, true)
+			}
+		}
+	}()
+
+	go setupHTTPEndpoints(registry, met.pm, port) // blocks in its own goroutine
+	log.Printf("[homebridge] serving Prometheus metrics on :%s/metrics", port)
+	return met
+}
+
+func (m *hbMetrics) recompute(engine *intellicenter.Engine, quiet bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pm.quiet = quiet
+	defer func() { m.pm.quiet = false }()
+	m.pm.refreshFromEngine(engine)
+}
+
+// onScan mirrors runMetricsEngine: a failed scan flags the connection-failure
+// gauge; a successful scan does a full logged refresh at the poll cadence.
+func (m *hbMetrics) onScan(engine *intellicenter.Engine, err error) {
+	if err != nil {
+		connectionFailure.Set(1)
+		return
+	}
+	connectionFailure.Set(0)
+	m.mu.Lock()
+	m.ready = true
+	m.mu.Unlock()
+	m.recompute(engine, false)
+	m.pm.updateRefreshTimestamp()
 }
 
 // hbPublisher gates state emission: circuit changes are only meaningful to the
@@ -357,7 +416,7 @@ func accessorySignature(items []hbAccessory) string {
 // hbRun wires an engine to the shim IPC and blocks on the engine run loop until
 // ctx is canceled. Split out from runHomebridge so it can be driven in tests
 // with an in-memory emitter.
-func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cmds <-chan hbSet) {
+func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cmds <-chan hbSet, metricsPort string) {
 	pub := &hbPublisher{}
 	engine.OnRawPoll = func(_ *intellicenter.Client, baseline bool) {
 		if baseline {
@@ -366,11 +425,20 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 			pub.resync(engine, out)
 		}
 	}
+	// Optional Prometheus metrics (opt-in via metricsPort): one sidecar serves
+	// both HomeKit and Grafana. nil when disabled.
+	var metrics *hbMetrics
+	if metricsPort != "" {
+		metrics = startHBMetrics(engine, metricsPort)
+	}
 	// Connection health: report connected/disconnected to the shim on change.
 	// OnScan fires nil on every successful scan and an error on connect/session
 	// failure. Emit only on change (and only once announced) to avoid spam.
 	lastConn, firstScan := false, true
 	engine.OnScan = func(err error) {
+		if metrics != nil {
+			metrics.onScan(engine, err) // full metric refresh + liveness gauges
+		}
 		connected := err == nil
 		if !firstScan && connected == lastConn {
 			return

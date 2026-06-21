@@ -341,7 +341,7 @@ func TestHomebridgeConnectionGoesOfflineOnDisconnect(t *testing.T) {
 	cmds := make(chan hbSet, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go hbRun(ctx, engine, out, cmds)
+	go hbRun(ctx, engine, out, cmds, "")
 
 	// Baseline announce → the connection sensor exists and is online.
 	waitForCond(t, func() bool { return strings.Contains(buf.String(), `"t":"accessories"`) })
@@ -374,7 +374,7 @@ func TestHomebridgeEngineAnnounces(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go hbRun(ctx, engine, out, cmds)
+	go hbRun(ctx, engine, out, cmds, "")
 
 	waitForCond(t, func() bool { return strings.Contains(buf.String(), `"t":"accessories"`) })
 	cancel()

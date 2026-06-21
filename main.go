@@ -1271,6 +1271,7 @@ type appConfig struct {
 	intelliCenterIP   string
 	intelliCenterPort string
 	httpPort          string
+	metricsPort       string // homebridge mode: serve Prometheus /metrics here ("" = off)
 	listenMode        bool
 	homebridge        bool
 	autoDiscover      bool // no static IP given → (re)discover via mDNS
@@ -1281,6 +1282,7 @@ type commandLineFlags struct {
 	intelliCenterIP   *string
 	intelliCenterPort *string
 	httpPort          *string
+	metricsPort       *string
 	listenMode        *bool
 	homebridge        *bool
 	pollInterval      *int
@@ -1300,6 +1302,8 @@ func defineFlags() *commandLineFlags {
 			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
 			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
+		metricsPort: flag.String("metrics-port", getEnvOrDefault("PENTAMETER_METRICS_PORT", ""),
+			"Homebridge mode: also serve Prometheus /metrics on this port (empty = disabled; env: PENTAMETER_METRICS_PORT)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
@@ -1384,6 +1388,7 @@ func parseCommandLineFlags() *appConfig {
 		intelliCenterIP:   *flags.intelliCenterIP,
 		intelliCenterPort: *flags.intelliCenterPort,
 		httpPort:          *flags.httpPort,
+		metricsPort:       *flags.metricsPort,
 		listenMode:        *flags.listenMode,
 		homebridge:        *flags.homebridge,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
