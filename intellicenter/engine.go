@@ -85,6 +85,18 @@ type Engine struct {
 	// without the engine knowing anything about metrics.
 	OnScan func(err error)
 
+	// OnRawPush, if set, receives every unsolicited push message verbatim before
+	// the engine applies it to typed state. It exists for the listen/troubleshooting
+	// consumer, which dumps raw protocol traffic the typed Change stream discards.
+	OnRawPush func(msg map[string]any)
+
+	// OnRawPoll, if set, is called after each successful scan (baseline + every
+	// poll) with the live request client and whether this scan is a fresh baseline
+	// (post-connect/reconnect). It lets the listen consumer run supplementary raw
+	// queries (circuit groups, all-object discovery) over the engine's connection
+	// instead of maintaining its own.
+	OnRawPoll func(req *Client, baseline bool)
+
 	mu     sync.RWMutex
 	kind   map[string]Kind
 	params map[string]map[string]string
@@ -120,6 +132,18 @@ func (e *Engine) logf(format string, args ...any) {
 func (e *Engine) onScan(err error) {
 	if e.OnScan != nil {
 		e.OnScan(err)
+	}
+}
+
+func (e *Engine) onRawPush(msg map[string]any) {
+	if e.OnRawPush != nil {
+		e.OnRawPush(msg)
+	}
+}
+
+func (e *Engine) onRawPoll(req *Client, baseline bool) {
+	if e.OnRawPoll != nil {
+		e.OnRawPoll(req, baseline)
 	}
 }
 
@@ -267,6 +291,7 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 	e.loadConfig(req) // best-effort: feature visibility, never fatal to a session
 	e.setReqClient(req)
 	e.onScan(nil) // baseline succeeded → live
+	e.onRawPoll(req, true)
 	e.logf("engine: connected to %s:%s (baseline complete)", e.host, e.port)
 
 	pollCtx, cancelPoll := context.WithCancel(ctx)
@@ -290,6 +315,9 @@ func (e *Engine) pollLoop(ctx context.Context, req *Client) {
 				e.logf("engine: poll error: %v", err)
 			}
 			e.onScan(err)
+			if err == nil {
+				e.onRawPoll(req, false)
+			}
 		}
 	}
 }
@@ -300,6 +328,7 @@ func (e *Engine) pushLoop(ctx context.Context, push *Client) error {
 		if err != nil {
 			return fmt.Errorf("push stream: %w", err)
 		}
+		e.onRawPush(msg)
 		e.handlePush(msg)
 	}
 	return nil // ctx canceled — shutdown, not an error

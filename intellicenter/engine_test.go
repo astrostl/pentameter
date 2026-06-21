@@ -80,10 +80,21 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	addr := strings.TrimPrefix(mock.srv.URL, "http://")
 	host, port, _ := strings.Cut(addr, ":")
 	e := NewEngine(host, port, time.Hour) // long poll so only baseline + push fire
-	var sawScanOK atomic.Bool
+	var sawScanOK, sawBaselinePoll atomic.Bool
+	var sawRawPush atomic.Bool
 	e.OnScan = func(err error) {
 		if err == nil {
 			sawScanOK.Store(true)
+		}
+	}
+	e.OnRawPoll = func(req *Client, baseline bool) {
+		if req != nil && baseline {
+			sawBaselinePoll.Store(true)
+		}
+	}
+	e.OnRawPush = func(msg map[string]any) {
+		if msg["command"] == "WriteParamList" {
+			sawRawPush.Store(true)
 		}
 	}
 	ch := e.Subscribe()
@@ -92,9 +103,10 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	defer cancel()
 	go func() { _ = e.Run(ctx) }()
 
-	// Baseline should populate the snapshot and fire OnScan(nil).
+	// Baseline should populate the snapshot and fire OnScan(nil) + OnRawPoll(baseline).
 	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
 	waitFor(t, sawScanOK.Load)
+	waitFor(t, sawBaselinePoll.Load)
 	snap := e.Snapshot()
 	if snap.Bodies["B1101"].Temp != 82 || !snap.Sensors[airSensorObjnam].Valid {
 		t.Fatalf("baseline snapshot incomplete: %+v", snap)
@@ -147,6 +159,8 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	if e.Snapshot().Circuits["C0001"].On {
 		t.Error("snapshot should reflect pushed OFF state")
 	}
+	// The raw push hook saw the unsolicited message verbatim.
+	waitFor(t, sawRawPush.Load)
 }
 
 // --- test helpers ---------------------------------------------------------
