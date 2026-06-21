@@ -187,6 +187,7 @@ func runHomebridge(cfg *appConfig) {
 // can't interfere with the IPC channel or with writes.
 type hbMetrics struct {
 	pm    *PoolMonitor
+	adv   *MDNSAdvertiser
 	mu    sync.Mutex
 	ready bool
 }
@@ -212,8 +213,27 @@ func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 	}()
 
 	go setupHTTPEndpoints(registry, met.pm, port) // blocks in its own goroutine
-	log.Printf("[homebridge] serving Prometheus metrics on :%s/metrics", port)
+
+	// Advertise the metrics endpoint over mDNS, matching standalone metrics mode.
+	// (Note: ineffective from inside bridge-networked Docker — same limitation
+	// that requires a static IP there — but correct when run on the host/LAN.)
+	if adv, err := StartMDNSAdvertiser(port, false); err != nil {
+		log.Printf("[homebridge] mDNS advertisement disabled: %v", err)
+	} else {
+		met.adv = adv
+	}
+	log.Printf("[homebridge] serving Prometheus metrics on :%s/metrics (mDNS-advertised)", port)
 	return met
+}
+
+// close releases the mDNS advertiser on shutdown.
+func (m *hbMetrics) close() {
+	if m == nil || m.adv == nil {
+		return
+	}
+	if err := m.adv.Close(); err != nil {
+		log.Printf("[homebridge] error closing mDNS advertiser: %v", err)
+	}
 }
 
 func (m *hbMetrics) recompute(engine *intellicenter.Engine, quiet bool) {
@@ -430,6 +450,7 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 	var metrics *hbMetrics
 	if metricsPort != "" {
 		metrics = startHBMetrics(engine, metricsPort)
+		defer metrics.close()
 	}
 	// Connection health: report connected/disconnected to the shim on change.
 	// OnScan fires nil on every successful scan and an error on connect/session
