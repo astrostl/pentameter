@@ -40,10 +40,12 @@ const (
 	hbKindThermostat = "thermostat"  // HomeKit accessory kind for a body+heater
 	hbKindLight      = "lightsensor" // read-only LightSensor: a raw metric encoded as lux
 	hbKindOccupancy  = "occupancy"   // read-only OccupancySensor: a boolean system state
+	hbKindTempSensor = "tempsensor"  // read-only TemperatureSensor (e.g. air temp)
 	hbMsgReady       = "ready"
 	hbMsgAccess      = "accessories"
 	hbMsgState       = "state"
 	hbMsgLState      = "lstate" // sidecar -> shim light-sensor (lux) value
+	hbMsgSState      = "sstate" // sidecar -> shim temperature-sensor (Celsius) value
 	hbMsgSet         = "set"
 	hbMsgTSet        = "tset" // shim -> sidecar thermostat command
 	hbFieldID        = "id"
@@ -136,6 +138,11 @@ func (e *hbEmitter) lstate(id string, lux float64) {
 	e.send(map[string]any{"t": hbMsgLState, hbFieldID: id, "lux": lux})
 }
 
+// sstate pushes a temperature-sensor's current value in Celsius (HomeKit's unit).
+func (e *hbEmitter) sstate(id string, c float64) {
+	e.send(map[string]any{"t": hbMsgSState, hbFieldID: id, "c": c})
+}
+
 // tstate pushes a thermostat's live values (Celsius) on a body change.
 func (e *hbEmitter) tstate(t *hbAccessory) {
 	e.send(map[string]any{
@@ -222,7 +229,30 @@ func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
 	items := append(hbCircuitItems(snap), hbThermostatItems(snap)...)
 	items = append(items, hbPumpSensorItems(snap)...)
 	items = append(items, hbPumpRunningItems(snap)...)
+	items = append(items, hbSensorItems(snap)...)
 	return append(items, hbFreezeItems(snap)...)
+}
+
+// hbSensorItems builds a read-only TemperatureSensor per valid temperature sensor
+// (e.g. the air sensor _A135). The controller reports °F (PROBE); HomeKit wants
+// Celsius, so values are converted. Water temp is already on each thermostat, so
+// only standalone sensors (air, solar) surface here.
+func hbSensorItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Sensors))
+	for id := range snap.Sensors {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]hbAccessory, 0, len(ids))
+	for _, id := range ids {
+		s := snap.Sensors[id]
+		if !s.Valid || s.Name == "" {
+			continue
+		}
+		c := fToC(s.Temp)
+		items = append(items, hbAccessory{ID: s.ID, Name: s.Name, Kind: hbKindTempSensor, CurC: &c})
+	}
+	return items
 }
 
 // hbPumpRunningItems builds a read-only OccupancySensor per pump reporting
@@ -356,6 +386,11 @@ func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *
 				out.lstate(pump.ID+"."+hbSensorGPM, pump.GPM)
 			}
 			out.state(pump.ID+"."+hbSensorRun, pump.On)
+		case ch.Sensor != nil:
+			// Temperature sensor (e.g. air) changed → push its Celsius value.
+			if ch.Sensor.Valid {
+				out.sstate(ch.Sensor.ID, fToC(ch.Sensor.Temp))
+			}
 		}
 	}
 }

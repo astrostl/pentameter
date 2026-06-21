@@ -172,6 +172,26 @@ func TestHBPumpSensorItems(t *testing.T) {
 	}
 }
 
+// TestHBSensorItems verifies temperature sensors become TemperatureSensors with
+// the °F PROBE value converted to Celsius, and invalid/nameless sensors skipped.
+func TestHBSensorItems(t *testing.T) {
+	snap := intellicenter.Snapshot{Sensors: map[string]intellicenter.Sensor{
+		"_A135": {ID: "_A135", Name: "Air", Temp: 77, Valid: true}, // 77°F -> 25°C
+		"_BAD":  {ID: "_BAD", Name: "Broken", Valid: false},        // invalid → skipped
+	}}
+	items := hbSensorItems(snap)
+	if len(items) != 1 {
+		t.Fatalf("want 1 temp sensor (invalid skipped), got %d", len(items))
+	}
+	s := items[0]
+	if s.ID != "_A135" || s.Kind != hbKindTempSensor || s.Name != "Air" {
+		t.Errorf("air sensor wrong: %+v", s)
+	}
+	if s.CurC == nil || *s.CurC != fToC(77) {
+		t.Errorf("temp should be 77°F converted to Celsius: %v", s.CurC)
+	}
+}
+
 // TestHBFreezeItems verifies the freeze-protection occupancy sensor is built from
 // the SUBTYP=FRZ feature circuit and tracks its STATUS.
 func TestHBFreezeItems(t *testing.T) {
