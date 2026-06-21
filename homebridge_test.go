@@ -150,6 +150,62 @@ func TestHBPumpItems(t *testing.T) {
 	}
 }
 
+// TestHBPumpSensorItems verifies pumps yield read-only LightSensors carrying raw
+// metrics as lux, with suffixed IDs, and GPM suppressed when the pump has no flow
+// capability (MaxFlow == 0, i.e. the controller's GPM is an estimate).
+func TestHBPumpSensorItems(t *testing.T) {
+	snap := intellicenter.Snapshot{Pumps: map[string]intellicenter.Pump{
+		"PMP01": {ID: "PMP01", Name: "VS", RPM: 1800, Watts: 215, GPM: 55, MaxFlow: 0},     // SPEED pump: no real flow
+		"PMP02": {ID: "PMP02", Name: "pool", RPM: 2450, Watts: 760, GPM: 45, MaxFlow: 140}, // VSF: real flow
+	}}
+	items := hbPumpSensorItems(snap)
+	byID := map[string]hbAccessory{}
+	for _, it := range items {
+		if it.Kind != hbKindLight {
+			t.Errorf("expected lightsensor kind: %+v", it)
+		}
+		byID[it.ID] = it
+	}
+	// VS pump: RPM + Watts, but NO GPM (MaxFlow 0).
+	if _, ok := byID["PMP01.gpm"]; ok {
+		t.Error("VS pump (MaxFlow=0) should not emit a GPM sensor")
+	}
+	if s := byID["PMP01.rpm"]; s.Lux == nil || *s.Lux != 1800 || s.Name != "VS RPM" {
+		t.Errorf("VS RPM sensor wrong: %+v", s)
+	}
+	if s := byID["PMP01.watts"]; s.Lux == nil || *s.Lux != 215 {
+		t.Errorf("VS Watts sensor wrong: %+v", s)
+	}
+	// VSF pump: GPM present.
+	if s := byID["PMP02.gpm"]; s.Lux == nil || *s.Lux != 45 || s.Name != "pool GPM" {
+		t.Errorf("VSF pump should emit GPM=45: %+v", s)
+	}
+}
+
+// TestHBFreezeItems verifies the freeze-protection occupancy sensor is built from
+// the SUBTYP=FRZ feature circuit and tracks its STATUS.
+func TestHBFreezeItems(t *testing.T) {
+	snap := intellicenter.Snapshot{Circuits: map[string]intellicenter.Circuit{
+		"C0001": {ID: "C0001", Name: "Spa", SubType: "SPA", On: true},
+		"_FEA2": {ID: "_FEA2", Name: "Freeze", SubType: "FRZ", On: true},
+	}}
+	items := hbFreezeItems(snap)
+	if len(items) != 1 {
+		t.Fatalf("want 1 freeze sensor, got %d", len(items))
+	}
+	f := items[0]
+	if f.ID != "_FEA2" || f.Kind != hbKindOccupancy || f.Name != "Freeze Protection" || !f.On {
+		t.Errorf("freeze sensor wrong: %+v", f)
+	}
+	// No FRZ circuit → no sensor.
+	none := hbFreezeItems(intellicenter.Snapshot{Circuits: map[string]intellicenter.Circuit{
+		"C0001": {ID: "C0001", SubType: "SPA"},
+	}})
+	if none != nil {
+		t.Errorf("no FRZ circuit should yield no freeze sensor, got %+v", none)
+	}
+}
+
 // TestCToF checks the HomeKit-Celsius -> IntelliCenter-Fahrenheit conversion
 // rounds to whole degrees and round-trips the common pool setpoints.
 func TestCToF(t *testing.T) {

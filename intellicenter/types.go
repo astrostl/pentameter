@@ -97,11 +97,12 @@ type Pump struct {
 	// On means the pump is running. Pump STATUS is a numeric code ("10" when
 	// running), not "ON", so on/off is derived from RPM > 0 — the unambiguous
 	// "is it spinning" signal.
-	On     bool
-	RPM    float64 // RPM (current speed)
-	MaxRPM float64 // MAX (configured maximum speed)
-	Watts  float64 // PWR (real power draw; WATTS key is a garbage echo on current firmware)
-	GPM    float64 // GPM (note: estimated, not measured, when the pump has no flow capability — MAXF=0)
+	On      bool
+	RPM     float64 // RPM (current speed)
+	MaxRPM  float64 // MAX (configured maximum speed)
+	Watts   float64 // PWR (real power draw; WATTS key is a garbage echo on current firmware)
+	GPM     float64 // GPM (estimated, not measured, when the pump has no flow capability — MaxFlow==0)
+	MaxFlow float64 // MAXF (max flow; 0 == no flow capability, so GPM is a controller estimate)
 }
 
 // Heater is a heater (objnam H####).
@@ -183,6 +184,7 @@ const (
 	keyPwr   = "PWR"
 	keyWatts = "WATTS"
 	keyGPM   = "GPM"
+	keyMaxF  = "MAXF" // max flow; 0 == pump has no flow capability (GPM is estimated)
 
 	condCircuit = "OBJTYP=CIRCUIT"
 	condBody    = "OBJTYP=BODY"

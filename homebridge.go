@@ -36,17 +36,26 @@ const (
 	hbStdinInitBuf = 64 * 1024   // initial stdin scanner buffer
 	hbStdinMaxBuf  = 1024 * 1024 // max stdin line length
 
-	hbKindSwitch     = "switch"     // HomeKit accessory kind for a circuit
-	hbKindThermostat = "thermostat" // HomeKit accessory kind for a body+heater
-	hbKindFan        = "fan"        // HomeKit accessory kind for a pump (read-only Fan)
+	hbKindSwitch     = "switch"      // HomeKit accessory kind for a circuit
+	hbKindThermostat = "thermostat"  // HomeKit accessory kind for a body+heater
+	hbKindFan        = "fan"         // HomeKit accessory kind for a pump (read-only Fan)
+	hbKindLight      = "lightsensor" // read-only LightSensor: a raw metric encoded as lux
+	hbKindOccupancy  = "occupancy"   // read-only OccupancySensor: a boolean system state
 	hbMsgReady       = "ready"
 	hbMsgAccess      = "accessories"
 	hbMsgState       = "state"
 	hbMsgFState      = "fstate" // sidecar -> shim pump (fan) state
+	hbMsgLState      = "lstate" // sidecar -> shim light-sensor (lux) value
 	hbMsgSet         = "set"
 	hbMsgTSet        = "tset" // shim -> sidecar thermostat command
 	hbFieldID        = "id"
 	hbFieldOn        = "on"
+
+	hbSubTypeFreeze = "FRZ"               // SUBTYP of the freeze-protection feature circuit (_FEA2)
+	hbFreezeName    = "Freeze Protection" // display name for the freeze occupancy sensor
+	hbSensorRPM     = "rpm"
+	hbSensorWatts   = "watts"
+	hbSensorGPM     = "gpm"
 
 	// hbPumpMaxRPM is the conventional Pentair VSP top speed, used only to scale
 	// RPM onto HomeKit's 0-100 RotationSpeed (a Fan has no raw-RPM characteristic).
@@ -85,6 +94,11 @@ type hbAccessory struct {
 	// real 0 (pump off) isn't confused with "absent".
 	Pct *int `json:"pct,omitempty"`
 	RPM *int `json:"rpm,omitempty"`
+
+	// Light-sensor field (kind=="lightsensor"). The raw metric value, which the
+	// shim encodes as lux (HomeKit has no read-only numeric tile; lux is the
+	// least-bad raw-number channel). Pointer so a real 0 isn't confused with absent.
+	Lux *float64 `json:"lux,omitempty"`
 }
 
 type hbSet struct {
@@ -133,6 +147,11 @@ func (e *hbEmitter) state(id string, on bool) {
 // RotationSpeed and the raw RPM). Pumps are poll-only, so this arrives on poll.
 func (e *hbEmitter) fstate(id string, on bool, pct, rpm int) {
 	e.send(map[string]any{"t": hbMsgFState, hbFieldID: id, hbFieldOn: on, "pct": pct, "rpm": rpm})
+}
+
+// lstate pushes a light-sensor's raw value (the shim encodes it as lux).
+func (e *hbEmitter) lstate(id string, lux float64) {
+	e.send(map[string]any{"t": hbMsgLState, hbFieldID: id, "lux": lux})
 }
 
 // tstate pushes a thermostat's live values (Celsius) on a body change.
@@ -215,10 +234,60 @@ func (p *hbPublisher) isPublished() bool {
 }
 
 // hbAllItems is the full announced accessory list: circuits (Features),
-// thermostats, then pumps, each already sorted by ID for stable output.
+// thermostats, pump fans, pump light-sensors, then the freeze sensor — each
+// group already sorted by ID for stable output.
 func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
 	items := append(hbCircuitItems(snap), hbThermostatItems(snap)...)
-	return append(items, hbPumpItems(snap)...)
+	items = append(items, hbPumpItems(snap)...)
+	items = append(items, hbPumpSensorItems(snap)...)
+	return append(items, hbFreezeItems(snap)...)
+}
+
+// hbPumpSensorItems builds read-only LightSensors carrying each pump's raw
+// metrics (RPM, WATTS, GPM) as lux — the only HomeKit element that shows a true
+// number read-only. IDs are suffixed so they don't collide with the pump's Fan.
+// GPM is emitted only when the pump is flow-capable (MaxFlow > 0); otherwise the
+// controller's GPM is an estimate and we suppress it.
+func hbPumpSensorItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Pumps))
+	for id := range snap.Pumps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var items []hbAccessory
+	for _, id := range ids {
+		pump := snap.Pumps[id]
+		add := func(metric, label string, val float64) {
+			v := val
+			items = append(items, hbAccessory{
+				ID: pump.ID + "." + metric, Name: pump.Name + " " + label, Kind: hbKindLight, Lux: &v,
+			})
+		}
+		add(hbSensorRPM, "RPM", pump.RPM)
+		add(hbSensorWatts, "Watts", pump.Watts)
+		if pump.MaxFlow > 0 { // only flow-capable pumps report a real GPM
+			add(hbSensorGPM, "GPM", pump.GPM)
+		}
+	}
+	return items
+}
+
+// hbFreezeItems builds a read-only OccupancySensor for freeze protection, driven
+// by the freeze-protection feature circuit (SUBTYP=FRZ, e.g. _FEA2). STATUS=ON
+// means freeze protection is actively running (API.md, verified on hardware).
+func hbFreezeItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Circuits))
+	for id := range snap.Circuits {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		c := snap.Circuits[id]
+		if c.SubType == hbSubTypeFreeze {
+			return []hbAccessory{{ID: c.ID, Name: hbFreezeName, Kind: hbKindOccupancy, On: c.On}}
+		}
+	}
+	return nil
 }
 
 // hbPumpItems builds one read-only Fan per pump, sorted by ID. RotationSpeed
@@ -314,8 +383,14 @@ func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *
 			t := thermostatStateFromBody(ch.Body)
 			out.tstate(&t)
 		case ch.Pump != nil:
-			// Pump RPM changed (poll-only) → refresh its read-only Fan.
-			out.fstate(ch.Pump.ID, ch.Pump.On, rpmToPct(ch.Pump.RPM, ch.Pump.MaxRPM), int(math.Round(ch.Pump.RPM)))
+			// Pump changed (poll-only) → refresh its Fan and its metric LightSensors.
+			p := ch.Pump
+			out.fstate(p.ID, p.On, rpmToPct(p.RPM, p.MaxRPM), int(math.Round(p.RPM)))
+			out.lstate(p.ID+"."+hbSensorRPM, p.RPM)
+			out.lstate(p.ID+"."+hbSensorWatts, p.Watts)
+			if p.MaxFlow > 0 {
+				out.lstate(p.ID+"."+hbSensorGPM, p.GPM)
+			}
 		}
 	}
 }

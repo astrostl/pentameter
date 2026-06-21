@@ -5,7 +5,7 @@ package intellicenter
 var (
 	circuitKeys = []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze, keyFeatr}
 	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
-	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyMax, keyPwr, keyWatts, keyGPM}
+	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyMax, keyPwr, keyWatts, keyGPM, keyMaxF}
 	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp, keyBody, keyCool}
 	sensorKeys  = []string{keySName, keyProbe, keySubTyp}
 )
@@ -46,13 +46,14 @@ func pumpFrom(objnam string, params map[string]string) Pump {
 		watts = parseFloat(params[keyWatts])
 	}
 	return Pump{
-		ID:     objnam,
-		Name:   params[keySName],
-		On:     rpm > 0, // STATUS is a numeric code, not "ON"; RPM > 0 == running
-		RPM:    rpm,
-		MaxRPM: parseFloat(params[keyMax]),
-		Watts:  watts,
-		GPM:    parseFloat(params[keyGPM]),
+		ID:      objnam,
+		Name:    params[keySName],
+		On:      rpm > 0, // STATUS is a numeric code, not "ON"; RPM > 0 == running
+		RPM:     rpm,
+		MaxRPM:  parseFloat(params[keyMax]),
+		Watts:   watts,
+		GPM:     parseFloat(params[keyGPM]),
+		MaxFlow: parseFloat(params[keyMaxF]),
 	}
 }
 
