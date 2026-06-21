@@ -1290,6 +1290,11 @@ type commandLineFlags struct {
 }
 
 func defineFlags() *commandLineFlags {
+	// --metrics is the default mode, so its value isn't read — running with no
+	// mode flag already means metrics. It's registered for explicitness and so it
+	// shows up in --help alongside the other modes.
+	_ = flag.Bool("metrics", getEnvOrDefault("PENTAMETER_METRICS", "false") == trueString,
+		"Run as the Prometheus metrics exporter (the default mode; env: PENTAMETER_METRICS)")
 	return &commandLineFlags{
 		intelliCenterIP: flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
 			"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)"),
@@ -1388,7 +1393,7 @@ func doubleDashUsage() {
 		names []string
 	}{
 		{"Functions (run once and exit)", []string{"discover", "version"}},
-		{"Modes (default: Prometheus metrics exporter)", []string{"homebridge", "listen"}},
+		{"Modes (pick one; metrics is the default)", []string{"metrics", "homebridge", "listen"}},
 		{"Configuration", []string{"ic-ip", "ic-port", "http-port", "interval"}},
 	}
 	for _, grp := range groups {
