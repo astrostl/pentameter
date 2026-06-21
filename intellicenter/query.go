@@ -18,7 +18,7 @@ func (c *Client) query(prefix, condition string, keys []string) ([]ObjectData, e
 
 // Circuits lists all circuits/features with on/off + freeze state.
 func (c *Client) Circuits() ([]Circuit, error) {
-	objs, err := c.query("circuits", "OBJTYP=CIRCUIT", []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze})
+	objs, err := c.query("circuits", condCircuit, circuitKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -27,21 +27,14 @@ func (c *Client) Circuits() ([]Circuit, error) {
 		if o.Params[keySName] == "" || o.Params[keyStatus] == "" {
 			continue
 		}
-		out = append(out, Circuit{
-			ID:      o.ObjName,
-			Name:    o.Params[keySName],
-			ObjType: o.Params[keyObjTyp],
-			SubType: o.Params[keySubTyp],
-			On:      o.Params[keyStatus] == statusOn,
-			Freeze:  o.Params[keyFreeze] == statusOn,
-		})
+		out = append(out, circuitFrom(o.ObjName, o.Params))
 	}
 	return out, nil
 }
 
 // Bodies lists pool/spa bodies with temp + heat mode + setpoints.
 func (c *Client) Bodies() ([]Body, error) {
-	objs, err := c.query("bodies", "OBJTYP=BODY", []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp})
+	objs, err := c.query("bodies", condBody, bodyKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -50,23 +43,14 @@ func (c *Client) Bodies() ([]Body, error) {
 		if o.Params[keySName] == "" {
 			continue
 		}
-		out = append(out, Body{
-			ID:        o.ObjName,
-			Name:      o.Params[keySName],
-			On:        o.Params[keyStatus] == statusOn,
-			Temp:      parseFloat(o.Params[keyTemp]),
-			HeatMode:  parseInt(o.Params[keyHTMode]),
-			HeaterID:  o.Params[keyHTSrc],
-			LoSetTemp: parseFloat(o.Params[keyLoTmp]),
-			HiSetTemp: parseFloat(o.Params[keyHiTmp]),
-		})
+		out = append(out, bodyFrom(o.ObjName, o.Params))
 	}
 	return out, nil
 }
 
 // Pumps lists pumps with RPM/WATTS/GPM (poll-only values).
 func (c *Client) Pumps() ([]Pump, error) {
-	objs, err := c.query("pumps", "OBJTYP=PUMP", []string{keySName, keyStatus, keyRPM, keyWatts, keyGPM})
+	objs, err := c.query("pumps", condPump, pumpKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -75,21 +59,14 @@ func (c *Client) Pumps() ([]Pump, error) {
 		if o.Params[keySName] == "" {
 			continue
 		}
-		out = append(out, Pump{
-			ID:    o.ObjName,
-			Name:  o.Params[keySName],
-			On:    o.Params[keyStatus] == statusOn,
-			RPM:   parseFloat(o.Params[keyRPM]),
-			Watts: parseFloat(o.Params[keyWatts]),
-			GPM:   parseFloat(o.Params[keyGPM]),
-		})
+		out = append(out, pumpFrom(o.ObjName, o.Params))
 	}
 	return out, nil
 }
 
 // Heaters lists heaters.
 func (c *Client) Heaters() ([]Heater, error) {
-	objs, err := c.query("heaters", "OBJTYP=HEATER", []string{keySName, keyStatus, keySubTyp, keyObjTyp})
+	objs, err := c.query("heaters", condHeater, heaterKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -98,12 +75,7 @@ func (c *Client) Heaters() ([]Heater, error) {
 		if o.Params[keySName] == "" {
 			continue
 		}
-		out = append(out, Heater{
-			ID:      o.ObjName,
-			Name:    o.Params[keySName],
-			On:      o.Params[keyStatus] == statusOn,
-			SubType: o.Params[keySubTyp],
-		})
+		out = append(out, heaterFrom(o.ObjName, o.Params))
 	}
 	return out, nil
 }
@@ -113,15 +85,14 @@ func (c *Client) Sensor(objnam string) (Sensor, error) {
 	resp, err := c.roundTrip("sensor", Request{
 		Command:    cmdGetParamList,
 		Condition:  condSense,
-		ObjectList: []Object{{ObjName: objnam, Keys: []string{keySName, keyProbe}}},
+		ObjectList: []Object{{ObjName: objnam, Keys: sensorKeys}},
 	})
 	if err != nil {
 		return Sensor{}, err
 	}
 	for _, o := range resp.ObjectList {
 		if o.ObjName == objnam {
-			probe := o.Params[keyProbe]
-			return Sensor{ID: objnam, Name: o.Params[keySName], Temp: parseFloat(probe), Valid: probe != ""}, nil
+			return sensorFrom(o.ObjName, o.Params), nil
 		}
 	}
 	return Sensor{ID: objnam}, nil

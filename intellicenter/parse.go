@@ -1,0 +1,63 @@
+package intellicenter
+
+// Key sets requested per object type, shared by the Client query methods and the
+// Engine's baseline/poll so the wire requests stay identical.
+var (
+	circuitKeys = []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze}
+	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
+	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyWatts, keyGPM}
+	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp}
+	sensorKeys  = []string{keySName, keyProbe}
+)
+
+// Per-object parsers: build a typed domain value from a (possibly merged) param
+// map. Used both by one-shot queries and by incremental push merges.
+
+func circuitFrom(objnam string, params map[string]string) Circuit {
+	return Circuit{
+		ID:      objnam,
+		Name:    params[keySName],
+		ObjType: params[keyObjTyp],
+		SubType: params[keySubTyp],
+		On:      params[keyStatus] == statusOn,
+		Freeze:  params[keyFreeze] == statusOn,
+	}
+}
+
+func bodyFrom(objnam string, params map[string]string) Body {
+	return Body{
+		ID:        objnam,
+		Name:      params[keySName],
+		On:        params[keyStatus] == statusOn,
+		Temp:      parseFloat(params[keyTemp]),
+		HeatMode:  parseInt(params[keyHTMode]),
+		HeaterID:  params[keyHTSrc],
+		LoSetTemp: parseFloat(params[keyLoTmp]),
+		HiSetTemp: parseFloat(params[keyHiTmp]),
+	}
+}
+
+func pumpFrom(objnam string, params map[string]string) Pump {
+	return Pump{
+		ID:    objnam,
+		Name:  params[keySName],
+		On:    params[keyStatus] == statusOn,
+		RPM:   parseFloat(params[keyRPM]),
+		Watts: parseFloat(params[keyWatts]),
+		GPM:   parseFloat(params[keyGPM]),
+	}
+}
+
+func heaterFrom(objnam string, params map[string]string) Heater {
+	return Heater{
+		ID:      objnam,
+		Name:    params[keySName],
+		On:      params[keyStatus] == statusOn,
+		SubType: params[keySubTyp],
+	}
+}
+
+func sensorFrom(objnam string, params map[string]string) Sensor {
+	probe := params[keyProbe]
+	return Sensor{ID: objnam, Name: params[keySName], Temp: parseFloat(probe), Valid: probe != ""}
+}

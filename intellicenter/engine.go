@@ -1,0 +1,454 @@
+package intellicenter
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+)
+
+const (
+	engineSubBuffer = 64
+	airSensorObjnam = "_A135"
+	engineReconnect = 2 * time.Second
+)
+
+// Snapshot is the engine's current view of all known equipment, keyed by objnam.
+type Snapshot struct {
+	Circuits map[string]Circuit
+	Bodies   map[string]Body
+	Pumps    map[string]Pump
+	Heaters  map[string]Heater
+	Sensors  map[string]Sensor
+}
+
+func newSnapshot() Snapshot {
+	return Snapshot{
+		Circuits: map[string]Circuit{},
+		Bodies:   map[string]Body{},
+		Pumps:    map[string]Pump{},
+		Heaters:  map[string]Heater{},
+		Sensors:  map[string]Sensor{},
+	}
+}
+
+func (s Snapshot) clone() Snapshot {
+	out := newSnapshot()
+	for k, v := range s.Circuits {
+		out.Circuits[k] = v
+	}
+	for k, v := range s.Bodies {
+		out.Bodies[k] = v
+	}
+	for k, v := range s.Pumps {
+		out.Pumps[k] = v
+	}
+	for k, v := range s.Heaters {
+		out.Heaters[k] = v
+	}
+	for k, v := range s.Sensors {
+		out.Sensors[k] = v
+	}
+	return out
+}
+
+// Change is a single equipment delta emitted on a push or a poll-diff. Exactly
+// one field is non-nil; its Kind method reports which.
+type Change struct {
+	Circuit *Circuit
+	Body    *Body
+	Pump    *Pump
+	Heater  *Heater
+	Sensor  *Sensor
+}
+
+// Engine maintains live IntelliCenter state from an unsolicited push stream plus
+// periodic polling, and broadcasts changes to subscribers. It is metrics- and
+// output-agnostic: consumers (metrics/listen/homebridge) subscribe and adapt.
+//
+// It holds two connections: a push connection (read-only, receives IntelliCenter's
+// WriteParamList broadcasts) and a request/response connection (periodic polls +
+// control writes). They cannot share a socket — a blocking stream read cannot
+// interleave with request/response.
+type Engine struct {
+	host, port string
+	pollEvery  time.Duration
+
+	// Logf, if set, receives human-readable diagnostics (reconnects, errors).
+	// nil = silent, so the package stays output-agnostic.
+	Logf func(format string, args ...any)
+
+	mu     sync.RWMutex
+	kind   map[string]Kind
+	params map[string]map[string]string
+	snap   Snapshot
+
+	subsMu sync.Mutex
+	subs   []chan Change
+
+	clientMu  sync.Mutex
+	reqClient *Client
+}
+
+// NewEngine builds an engine targeting ws://host:port, polling every pollEvery.
+func NewEngine(host, port string, pollEvery time.Duration) *Engine {
+	return &Engine{
+		host:      host,
+		port:      port,
+		pollEvery: pollEvery,
+		kind:      map[string]Kind{},
+		params:    map[string]map[string]string{},
+		snap:      newSnapshot(),
+	}
+}
+
+func (e *Engine) logf(format string, args ...any) {
+	if e.Logf != nil {
+		e.Logf(format, args...)
+	}
+}
+
+// Subscribe returns a channel of Change events. Subscribe before calling Run to
+// receive the initial baseline as a series of changes. The channel is buffered;
+// if a consumer falls behind, changes are dropped rather than blocking the engine.
+func (e *Engine) Subscribe() <-chan Change {
+	ch := make(chan Change, engineSubBuffer)
+	e.subsMu.Lock()
+	e.subs = append(e.subs, ch)
+	e.subsMu.Unlock()
+	return ch
+}
+
+func (e *Engine) emit(c Change) {
+	e.subsMu.Lock()
+	defer e.subsMu.Unlock()
+	for _, ch := range e.subs {
+		select {
+		case ch <- c:
+		default: // consumer behind — drop rather than block the engine
+		}
+	}
+}
+
+// Snapshot returns a deep copy of the current state.
+func (e *Engine) Snapshot() Snapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.snap.clone()
+}
+
+// --- control (writes) -----------------------------------------------------
+
+// SetCircuit turns a circuit/feature/body on or off.
+func (e *Engine) SetCircuit(id string, on bool) error {
+	return e.withReqClient(func(c *Client) error { return c.SetCircuit(id, on) })
+}
+
+// SetHeatSetpoint sets a body's heat setpoint (°F).
+func (e *Engine) SetHeatSetpoint(bodyID string, tempF int) error {
+	return e.withReqClient(func(c *Client) error { return c.SetHeatSetpoint(bodyID, tempF) })
+}
+
+// SetCoolSetpoint sets a body's cool setpoint (°F) for heat-pump bodies.
+func (e *Engine) SetCoolSetpoint(bodyID string, tempF int) error {
+	return e.withReqClient(func(c *Client) error { return c.SetCoolSetpoint(bodyID, tempF) })
+}
+
+func (e *Engine) withReqClient(fn func(*Client) error) error {
+	e.clientMu.Lock()
+	c := e.reqClient
+	e.clientMu.Unlock()
+	if c == nil {
+		return fmt.Errorf("engine not connected")
+	}
+	return fn(c)
+}
+
+func (e *Engine) setReqClient(c *Client) {
+	e.clientMu.Lock()
+	e.reqClient = c
+	e.clientMu.Unlock()
+}
+
+// --- run loop -------------------------------------------------------------
+
+// Run connects, performs an initial baseline scan, then runs the push stream and
+// the poll ticker until ctx is canceled. It reconnects with backoff on failure.
+func (e *Engine) Run(ctx context.Context) error {
+	delay := engineReconnect
+	for ctx.Err() == nil {
+		req := New(e.host, e.port)
+		push := New(e.host, e.port)
+
+		if err := req.ConnectWithRetry(ctx); err != nil {
+			e.logf("engine: connect (req) failed: %v", err)
+		} else if err := push.ConnectWithRetry(ctx); err != nil {
+			e.logf("engine: connect (push) failed: %v", err)
+			req.Close()
+		} else if err := e.session(ctx, req, push); err != nil {
+			e.logf("engine: session ended: %v", err)
+		}
+
+		req.Close()
+		push.Close()
+		e.setReqClient(nil)
+
+		// sleepCtx returns false (→ break) if ctx is canceled during backoff;
+		// the loop header re-checks ctx.Err() otherwise.
+		if !sleepCtx(ctx, delay) {
+			break
+		}
+		delay = nextEngineDelay(delay)
+	}
+	return nil // exits only on ctx cancellation — a clean shutdown, not an error
+}
+
+// session runs one connected lifetime: baseline, then poll ticker + push loop.
+func (e *Engine) session(ctx context.Context, req, push *Client) error {
+	if err := e.scan(req); err != nil {
+		return fmt.Errorf("baseline: %w", err)
+	}
+	e.setReqClient(req)
+	e.logf("engine: connected to %s:%s (baseline complete)", e.host, e.port)
+
+	pollCtx, cancelPoll := context.WithCancel(ctx)
+	defer cancelPoll()
+	go e.pollLoop(pollCtx, req)
+
+	// Push loop runs in the foreground; returns when the stream errors or ctx ends.
+	return e.pushLoop(ctx, push)
+}
+
+func (e *Engine) pollLoop(ctx context.Context, req *Client) {
+	ticker := time.NewTicker(e.pollEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := e.scan(req); err != nil {
+				e.logf("engine: poll error: %v", err)
+			}
+		}
+	}
+}
+
+func (e *Engine) pushLoop(ctx context.Context, push *Client) error {
+	for ctx.Err() == nil {
+		msg, err := push.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("push stream: %w", err)
+		}
+		e.handlePush(msg)
+	}
+	return nil // ctx canceled — shutdown, not an error
+}
+
+// --- state updates --------------------------------------------------------
+
+type scanGroup struct {
+	kind Kind
+	cond string
+	keys []string
+}
+
+var scanGroups = []scanGroup{
+	{KindCircuit, condCircuit, circuitKeys},
+	{KindBody, condBody, bodyKeys},
+	{KindPump, condPump, pumpKeys},
+	{KindHeater, condHeater, heaterKeys},
+}
+
+// scan does a full request/response read of every equipment type plus the air
+// sensor, merging results and emitting changes. Used for the initial baseline
+// and for each poll tick (idempotent: only differences emit).
+func (e *Engine) scan(req *Client) error {
+	for _, g := range scanGroups {
+		objs, err := req.query(string(g.kind), g.cond, g.keys)
+		if err != nil {
+			return err
+		}
+		for _, o := range objs {
+			if o.Params[keySName] == "" {
+				continue
+			}
+			e.applyAndEmit(g.kind, o.ObjName, o.Params)
+		}
+	}
+	if params, ok := e.querySensor(req, airSensorObjnam); ok {
+		e.applyAndEmit(KindSensor, airSensorObjnam, params)
+	}
+	return nil
+}
+
+func (e *Engine) querySensor(c *Client, objnam string) (map[string]string, bool) {
+	resp, err := c.roundTrip("sensor", Request{
+		Command:    cmdGetParamList,
+		Condition:  condSense,
+		ObjectList: []Object{{ObjName: objnam, Keys: sensorKeys}},
+	})
+	if err != nil {
+		return nil, false
+	}
+	for _, o := range resp.ObjectList {
+		if o.ObjName == objnam {
+			return o.Params, true
+		}
+	}
+	return nil, false
+}
+
+// handlePush applies an unsolicited push (WriteParamList/NotifyList). Objects not
+// seen during baseline are skipped; the next poll will pick them up.
+func (e *Engine) handlePush(msg map[string]any) {
+	for _, po := range extractPushObjects(msg) {
+		kind, known := e.kindOf(po.objnam)
+		if !known {
+			continue
+		}
+		e.applyAndEmit(kind, po.objnam, po.params)
+	}
+}
+
+func (e *Engine) kindOf(objnam string) (Kind, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	k, ok := e.kind[objnam]
+	return k, ok
+}
+
+// applyAndEmit merges partial params for an object, reparses it, and emits a
+// Change if the typed value changed.
+func (e *Engine) applyAndEmit(kind Kind, objnam string, partial map[string]string) {
+	e.mu.Lock()
+	cur := e.params[objnam]
+	if cur == nil {
+		cur = map[string]string{}
+		e.params[objnam] = cur
+	}
+	for k, v := range partial {
+		cur[k] = v
+	}
+	e.kind[objnam] = kind
+	change, changed := e.reparseLocked(kind, objnam, cur)
+	e.mu.Unlock()
+
+	if changed {
+		e.emit(change)
+	}
+}
+
+// diffStore stores v under id and reports whether it differs from the prior value.
+func diffStore[T comparable](m map[string]T, id string, v T) bool {
+	if prev, ok := m[id]; ok && prev == v {
+		return false
+	}
+	m[id] = v
+	return true
+}
+
+// reparseLocked rebuilds the typed value from params, updates the snapshot, and
+// reports whether it changed. Caller must hold e.mu.
+func (e *Engine) reparseLocked(kind Kind, objnam string, params map[string]string) (Change, bool) {
+	switch kind {
+	case KindCircuit:
+		v := circuitFrom(objnam, params)
+		return Change{Circuit: &v}, diffStore(e.snap.Circuits, objnam, v)
+	case KindBody:
+		v := bodyFrom(objnam, params)
+		return Change{Body: &v}, diffStore(e.snap.Bodies, objnam, v)
+	case KindPump:
+		v := pumpFrom(objnam, params)
+		return Change{Pump: &v}, diffStore(e.snap.Pumps, objnam, v)
+	case KindHeater:
+		v := heaterFrom(objnam, params)
+		return Change{Heater: &v}, diffStore(e.snap.Heaters, objnam, v)
+	case KindSensor:
+		v := sensorFrom(objnam, params)
+		return Change{Sensor: &v}, diffStore(e.snap.Sensors, objnam, v)
+	default:
+		return Change{}, false
+	}
+}
+
+// --- push message parsing -------------------------------------------------
+
+type pushObject struct {
+	objnam string
+	params map[string]string
+}
+
+// extractPushObjects pulls {objnam, params} pairs out of an IntelliCenter push.
+// It tolerates both shapes seen in the wild: objectList[].{objnam,params} and
+// objectList[].changes[].{objnam,params}.
+func extractPushObjects(msg map[string]any) []pushObject {
+	list, ok := msg["objectList"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []pushObject
+	for _, item := range list {
+		if obj, ok := item.(map[string]any); ok {
+			out = appendPushObjects(out, obj)
+		}
+	}
+	return out
+}
+
+// appendPushObjects extracts the direct object and any nested "changes" entries
+// from one objectList item.
+func appendPushObjects(out []pushObject, obj map[string]any) []pushObject {
+	if po, ok := toPushObject(obj); ok {
+		out = append(out, po)
+	}
+	changes, ok := obj["changes"].([]any)
+	if !ok {
+		return out
+	}
+	for _, ch := range changes {
+		if cm, ok := ch.(map[string]any); ok {
+			if po, ok := toPushObject(cm); ok {
+				out = append(out, po)
+			}
+		}
+	}
+	return out
+}
+
+func toPushObject(obj map[string]any) (pushObject, bool) {
+	objnam, ok := obj["objnam"].(string)
+	if !ok || objnam == "" {
+		return pushObject{}, false
+	}
+	rawParams, ok := obj["params"].(map[string]any)
+	if !ok {
+		return pushObject{}, false
+	}
+	params := make(map[string]string, len(rawParams))
+	for k, v := range rawParams {
+		if s, ok := v.(string); ok {
+			params[k] = s
+		}
+	}
+	return pushObject{objnam: objnam, params: params}, true
+}
+
+// --- backoff helpers ------------------------------------------------------
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+func nextEngineDelay(d time.Duration) time.Duration {
+	d *= 2
+	if d > maxDelay {
+		return maxDelay
+	}
+	return d
+}

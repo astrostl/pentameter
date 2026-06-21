@@ -150,7 +150,22 @@ const (
 	keyWatts  = "WATTS"
 	keyGPM    = "GPM"
 
-	condSense = "OBJTYP=SENSE"
+	condCircuit = "OBJTYP=CIRCUIT"
+	condBody    = "OBJTYP=BODY"
+	condPump    = "OBJTYP=PUMP"
+	condHeater  = "OBJTYP=HEATER"
+	condSense   = "OBJTYP=SENSE"
 
 	valueOff = "OFF"
+)
+
+// Kind identifies an equipment type within the engine's state model.
+type Kind string
+
+const (
+	KindCircuit Kind = "circuit"
+	KindBody    Kind = "body"
+	KindPump    Kind = "pump"
+	KindHeater  Kind = "heater"
+	KindSensor  Kind = "sensor"
 )
