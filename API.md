@@ -299,13 +299,43 @@ The `GetParamList` command retrieves current operational data for monitoring.
   controller estimate. Only trust GPM when `MAXF > 0` (flow-capable VSF pumps).
 - **MAXF**: maximum flow (GPM). `0` means the pump has no flow capability — see GPM caveat above.
 
-**Per-circuit speed programs (PMPCIRC):** each pump has child objects `p<pump><n>`
-(e.g. `p0101`–`p0104` for `PMP01`) mapping a circuit to the speed the pump runs
-when that circuit is the active demand. Keys: `CIRCUIT` (the driven circuit's
-objnam), `SPEED` (RPM), `SELECT` (`RPM` vs `GPM` mode). The pump's **current RPM
-equals the active circuit's programmed SPEED** (highest demand wins, freeze
-protection overrides). Example (VS pump): Spa→1800, Heater→3000, Spa Jets→3400,
-Freeze→2200.
+**Per-circuit speed programs (PMPCIRC) — the circuit⇄pump⇄speed graph:**
+
+A variable-speed pump doesn't have one speed; it has a *table* of speed
+assignments, one per circuit that can call it. These are first-class objects
+(`OBJTYP=PMPCIRC`), and the relationship is explicit in the data model, not
+inferred:
+
+- **Ownership is encoded in the objnam.** A PMPCIRC is named `p<pump##><slot>`,
+  so `p0101`–`p0104` belong to **PMP01**, `p0201`–`p0202` belong to **PMP02**.
+  The prefix tells you which pump owns the assignment. (Note the lowercase `p` —
+  distinct from the `PMP##` pump objects themselves.)
+- **Each assignment links to a circuit + speed.** Keys: `CIRCUIT` (the driven
+  circuit's objnam), `SPEED` (RPM), `SELECT` (`RPM` vs `GPM` mode).
+- **The driven circuit may be any kind:** a real equipment circuit (`C####`,
+  e.g. C0001 "Spa"), a Feature (`FTR##`, e.g. FTR03 "Spa Jets"), or a **virtual
+  `X`-prefixed demand circuit** (e.g. X0051 "Heater", X0046 "Freeze") — internal
+  conditions the controller raises, not user-facing equipment.
+- **The pump object also carries a `CIRCUIT` field** naming its current/primary
+  driver (e.g. PMP01 `CIRCUIT=C0001`).
+
+So the full graph is reconstructable from the protocol in both directions:
+pump → its `p<pump>xx` children → each driven circuit + assigned speed.
+
+**This is how RPM is decided:** the pump runs the assigned speed of whichever
+associated circuit is the active demand; when several are active the **highest
+speed wins**, and **freeze protection overrides everything** (see Freeze section).
+Concretely it means a bare RPM is explainable — "pump at 3400 because Spa Jets
+(FTR03) is active and its assignment is 3400 RPM."
+
+Example (PMP01 / VS pump):
+
+| PMPCIRC | CIRCUIT | Name | Kind | SPEED |
+|---|---|---|---|---|
+| p0101 | C0001 | Spa | body circuit | 1800 |
+| p0102 | X0051 | Heater | virtual demand | 3000 |
+| p0103 | FTR03 | Spa Jets | Feature | 3400 |
+| p0104 | X0046 | Freeze | virtual demand | 2200 |
 
 ### Circuit and Feature Status
 
