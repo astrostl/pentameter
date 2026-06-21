@@ -117,6 +117,32 @@ func TestThermostatAssembly(t *testing.T) {
 	}
 }
 
+// TestCToF checks the HomeKit-Celsius -> IntelliCenter-Fahrenheit conversion
+// rounds to whole degrees and round-trips the common pool setpoints.
+func TestCToF(t *testing.T) {
+	cases := []struct {
+		c    float64
+		want int
+	}{
+		{0, 32},
+		{29.4, 85}, // pool heat setpoint
+		{33.3, 92}, // pool cool setpoint
+		{40, 104},  // spa max
+		{36.7, 98}, // spa heat setpoint
+	}
+	for _, tc := range cases {
+		if got := cToF(tc.c); got != tc.want {
+			t.Errorf("cToF(%v): got %d want %d", tc.c, got, tc.want)
+		}
+	}
+	// fToC then cToF round-trips whole Fahrenheit degrees.
+	for f := 50; f <= 104; f++ {
+		if got := cToF(fToC(float64(f))); got != f {
+			t.Errorf("round-trip %d°F -> %d°F", f, got)
+		}
+	}
+}
+
 // TestHomebridgeEngineAnnounces drives the engine against a mock and asserts the
 // adapter announces the discovered circuits + ready over the IPC.
 func TestHomebridgeEngineAnnounces(t *testing.T) {

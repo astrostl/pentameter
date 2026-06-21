@@ -237,6 +237,12 @@ func (e *Engine) SetCoolSetpoint(bodyID string, tempF int) error {
 	return e.withReqClient(func(c *Client) error { return c.SetCoolSetpoint(bodyID, tempF) })
 }
 
+// SetHeatSource assigns a body's heat source (heater objnam, or HeatSourceNone
+// to turn heating off).
+func (e *Engine) SetHeatSource(bodyID, heaterID string) error {
+	return e.withReqClient(func(c *Client) error { return c.SetHeatSource(bodyID, heaterID) })
+}
+
 func (e *Engine) withReqClient(fn func(*Client) error) error {
 	e.clientMu.Lock()
 	c := e.reqClient

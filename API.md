@@ -682,6 +682,31 @@ For reliable on/off/idle detection, use the combination of HTMODE and HTSRC:
 - Use `HTMODE == 4` to detect heat pump heating operations
 - Use `HTMODE == 9` to detect heat pump cooling operations
 
+### Writing Heat State (SetParamList)
+
+Heating is controlled by writing **the body** (not the heater) via `SetParamList`.
+All three writes target the body objnam (e.g. `B1101`); values are strings.
+
+| Goal | Param | Value |
+|------|-------|-------|
+| Heat setpoint | `LOTMP` | whole °F, e.g. `"85"` |
+| Cool setpoint (heat pump) | `HITMP` | whole °F, e.g. `"92"` |
+| Turn heat on | `HTSRC` | heater objnam, e.g. `"H0001"` |
+| Turn heat off | `HTSRC` | `"00000"` |
+
+```json
+{"command": "SetParamList", "objectList": [
+  {"objnam": "B1101", "params": {"HTSRC": "H0001"}}
+]}
+```
+
+Notes:
+- There is no separate heat/cool *mode* write — a heat pump chooses heating vs
+  cooling itself from where `TEMP` sits relative to the `LOTMP`/`HITMP` band. The
+  only mode knob is `HTSRC` (assign a heater = on, `"00000"` = off).
+- Confirmation arrives as an unsolicited `WriteParamList` push reflecting the new
+  `HTSRC`/`LOTMP`/`HITMP`/`HTMODE` — no re-poll needed.
+
 ## Heat Pump Detection and Monitoring
 
 IntelliCenter systems with UltraTemp heat pumps support both heating and cooling operations with multiple operational modes. Heat pump monitoring requires tracking multiple object types and parameters.

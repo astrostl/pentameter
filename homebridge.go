@@ -41,7 +41,10 @@ const (
 	hbMsgAccess      = "accessories"
 	hbMsgState       = "state"
 	hbMsgSet         = "set"
+	hbMsgTSet        = "tset" // shim -> sidecar thermostat command
 	hbFieldID        = "id"
+
+	hbModeOn = "on" // tset mode: assign the body's heater (vs "off" = no heater)
 
 	hbHeatSrcNone  = "00000" // HTSRC value meaning "no heater assigned" (heat off)
 	hbHeatModeCool = 9       // HTMODE: heat-pump actively cooling
@@ -73,6 +76,13 @@ type hbSet struct {
 	T  string `json:"t"`
 	ID string `json:"id"`
 	On bool   `json:"on"`
+
+	// Thermostat command fields (t=="tset"). Pointers so an absent field is
+	// distinguishable from a zero value; each is applied independently as the
+	// matching HomeKit characteristic changes.
+	HeatC *float64 `json:"heatC,omitempty"` // heat setpoint (Celsius) -> LOTMP
+	CoolC *float64 `json:"coolC,omitempty"` // cool setpoint (Celsius) -> HITMP
+	Mode  string   `json:"mode,omitempty"`  // off | on  -> HTSRC (none / heater)
 }
 
 // hbEmitter serializes newline-JSON writes to stdout.
@@ -201,11 +211,43 @@ func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *
 // state, so no explicit re-poll is needed.
 func hbApplySets(engine *intellicenter.Engine, cmds <-chan hbSet) {
 	for cmd := range cmds {
-		if cmd.T != hbMsgSet {
-			continue
+		switch cmd.T {
+		case hbMsgSet:
+			if err := engine.SetCircuit(cmd.ID, cmd.On); err != nil {
+				log.Printf("[homebridge] set %s=%v failed: %v", cmd.ID, cmd.On, err)
+			}
+		case hbMsgTSet:
+			hbApplyThermostat(engine, cmd)
 		}
-		if err := engine.SetCircuit(cmd.ID, cmd.On); err != nil {
-			log.Printf("[homebridge] set %s=%v failed: %v", cmd.ID, cmd.On, err)
+	}
+}
+
+// hbApplyThermostat applies one thermostat command (any subset of heat setpoint,
+// cool setpoint, on/off mode) to a body via the engine.
+func hbApplyThermostat(engine *intellicenter.Engine, cmd hbSet) {
+	if cmd.HeatC != nil {
+		if err := engine.SetHeatSetpoint(cmd.ID, cToF(*cmd.HeatC)); err != nil {
+			log.Printf("[homebridge] heat setpoint %s failed: %v", cmd.ID, err)
+		}
+	}
+	if cmd.CoolC != nil {
+		if err := engine.SetCoolSetpoint(cmd.ID, cToF(*cmd.CoolC)); err != nil {
+			log.Printf("[homebridge] cool setpoint %s failed: %v", cmd.ID, err)
+		}
+	}
+	if cmd.Mode != "" {
+		src := intellicenter.HeatSourceNone
+		if cmd.Mode == hbModeOn {
+			heaters := realHeatersByBody(engine.Snapshot())
+			heater, ok := heaters[cmd.ID]
+			if !ok {
+				log.Printf("[homebridge] mode on for %s: no real heater; ignoring", cmd.ID)
+				return
+			}
+			src = heater.ID
+		}
+		if err := engine.SetHeatSource(cmd.ID, src); err != nil {
+			log.Printf("[homebridge] heat source %s=%s failed: %v", cmd.ID, src, err)
 		}
 	}
 }
@@ -320,6 +362,16 @@ func fToC(f float64) float64 {
 	)
 	c := (f - freezeF) / ratio
 	return math.Round(c*fToCRound) / fToCRound
+}
+
+// cToF converts a HomeKit Celsius setpoint to the nearest whole Fahrenheit
+// degree, IntelliCenter's native setpoint unit.
+func cToF(c float64) int {
+	const (
+		freezeF = 32.0
+		ratio   = 1.8
+	)
+	return int(math.Round(c*ratio + freezeF))
 }
 
 // hbReadStdin parses newline-JSON commands from the shim. If stdin closes the

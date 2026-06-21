@@ -38,3 +38,12 @@ func (c *Client) SetHeatSetpoint(bodyObjnam string, lowTempF int) error {
 func (c *Client) SetCoolSetpoint(bodyObjnam string, highTempF int) error {
 	return c.SetParams(bodyObjnam, map[string]string{keyHiTmp: fmt.Sprintf("%d", highTempF)})
 }
+
+// SetHeatSource assigns a body's heat source (HTSRC). Pass a heater objnam to
+// enable that heater, or HeatSourceNone to turn heating off.
+func (c *Client) SetHeatSource(bodyObjnam, heaterObjnam string) error {
+	return c.SetParams(bodyObjnam, map[string]string{keyHTSrc: heaterObjnam})
+}
+
+// HeatSourceNone is the HTSRC value meaning "no heater assigned" (heat off).
+const HeatSourceNone = "00000"

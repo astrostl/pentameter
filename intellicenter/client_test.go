@@ -167,6 +167,38 @@ func TestSetCircuit(t *testing.T) {
 	}
 }
 
+func TestSetHeatControls(t *testing.T) {
+	f := newFakeIC(t)
+	defer f.close()
+	c := dial(t, f)
+	defer c.Close()
+
+	if err := c.SetHeatSetpoint("B1101", 85); err != nil {
+		t.Fatalf("SetHeatSetpoint: %v", err)
+	}
+	if obj := f.lastSet.ObjectList[0]; obj.ObjName != "B1101" || obj.Params["LOTMP"] != "85" {
+		t.Errorf("heat setpoint wrong: %+v", f.lastSet)
+	}
+	if err := c.SetCoolSetpoint("B1101", 92); err != nil {
+		t.Fatalf("SetCoolSetpoint: %v", err)
+	}
+	if f.lastSet.ObjectList[0].Params["HITMP"] != "92" {
+		t.Errorf("cool setpoint wrong: %+v", f.lastSet)
+	}
+	if err := c.SetHeatSource("B1101", "H0001"); err != nil {
+		t.Fatalf("SetHeatSource: %v", err)
+	}
+	if f.lastSet.ObjectList[0].Params["HTSRC"] != "H0001" {
+		t.Errorf("heat source wrong: %+v", f.lastSet)
+	}
+	if err := c.SetHeatSource("B1101", HeatSourceNone); err != nil {
+		t.Fatalf("SetHeatSource off: %v", err)
+	}
+	if f.lastSet.ObjectList[0].Params["HTSRC"] != "00000" {
+		t.Errorf("heat source off wrong: %+v", f.lastSet)
+	}
+}
+
 func TestShouldShowFeature(t *testing.T) {
 	if !ShouldShowFeature("ABCw") {
 		t.Error("ABCw should be visible")
