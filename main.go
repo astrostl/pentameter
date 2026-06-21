@@ -2007,10 +2007,14 @@ func main() {
 
 	registry := createPrometheusRegistry()
 
-	// Opt-in: serve metrics from the push-based engine instead of the legacy
-	// poll loop. The default path below is unchanged.
-	if cfg.useEngine && !cfg.listenMode {
-		runMetricsEngine(cfg, registry)
+	// Opt-in: drive metrics/listen from the push-based engine instead of the
+	// legacy poll loops. The default paths below are unchanged.
+	if cfg.useEngine {
+		if cfg.listenMode {
+			runListenEngine(cfg)
+		} else {
+			runMetricsEngine(cfg, registry)
+		}
 		return
 	}
 
