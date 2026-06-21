@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -1374,25 +1375,45 @@ func resolveIntelliCenterIP(ip string) string {
 	return discoveredIP
 }
 
-// doubleDashUsage prints flags in --flag form. Go's flag package already accepts
-// -flag and --flag identically; this only changes how usage is displayed so the
-// double-dash form reads as the documented convention. Both forms keep working.
+// doubleDashUsage prints flags in --flag form, grouped into Functions (run once
+// and exit), Modes (which long-running role to run as), and Configuration
+// (settings). Go's flag package already accepts -flag and --flag identically;
+// this only changes how usage is displayed. Both forms keep working.
 func doubleDashUsage() {
 	out := flag.CommandLine.Output()
 	fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
-	flag.VisitAll(func(fl *flag.Flag) {
-		argName, usage := flag.UnquoteUsage(fl)
-		line := "  --" + fl.Name
-		if argName != "" {
-			line += " " + argName
+	groups := []struct {
+		title string
+		names []string
+	}{
+		{"Functions (run once and exit)", []string{"discover", "version"}},
+		{"Modes (default: Prometheus metrics exporter)", []string{"homebridge", "listen"}},
+		{"Configuration", []string{"ic-ip", "ic-port", "http-port", "interval"}},
+	}
+	for _, grp := range groups {
+		fmt.Fprintf(out, "\n%s:\n", grp.title)
+		for _, name := range grp.names {
+			if fl := flag.Lookup(name); fl != nil {
+				printFlagUsage(out, fl)
+			}
 		}
-		fmt.Fprintln(out, line)
-		fmt.Fprintf(out, "    \t%s", usage)
-		if !isZeroFlagValue(fl.DefValue) {
-			fmt.Fprintf(out, " (default %q)", fl.DefValue)
-		}
-		fmt.Fprintln(out)
-	})
+	}
+}
+
+// printFlagUsage renders one flag in --flag form, mirroring the stdlib's
+// PrintDefaults layout (name, arg type, usage, default when non-zero).
+func printFlagUsage(out io.Writer, fl *flag.Flag) {
+	argName, usage := flag.UnquoteUsage(fl)
+	line := "  --" + fl.Name
+	if argName != "" {
+		line += " " + argName
+	}
+	fmt.Fprintln(out, line)
+	fmt.Fprintf(out, "    \t%s", usage)
+	if !isZeroFlagValue(fl.DefValue) {
+		fmt.Fprintf(out, " (default %q)", fl.DefValue)
+	}
+	fmt.Fprintln(out)
 }
 
 // isZeroFlagValue reports whether a flag's default is its type's zero value, so
