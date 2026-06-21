@@ -1378,8 +1378,36 @@ func resolveIntelliCenterIP(ip string) string {
 	return discoveredIP
 }
 
+// doubleDashUsage prints flags in --flag form. Go's flag package already accepts
+// -flag and --flag identically; this only changes how usage is displayed so the
+// double-dash form reads as the documented convention. Both forms keep working.
+func doubleDashUsage() {
+	out := flag.CommandLine.Output()
+	fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
+	flag.VisitAll(func(fl *flag.Flag) {
+		argName, usage := flag.UnquoteUsage(fl)
+		line := "  --" + fl.Name
+		if argName != "" {
+			line += " " + argName
+		}
+		fmt.Fprintln(out, line)
+		fmt.Fprintf(out, "    \t%s", usage)
+		if !isZeroFlagValue(fl.DefValue) {
+			fmt.Fprintf(out, " (default %q)", fl.DefValue)
+		}
+		fmt.Fprintln(out)
+	})
+}
+
+// isZeroFlagValue reports whether a flag's default is its type's zero value, so
+// (like the stdlib's PrintDefaults) we omit "(default ...)" for those.
+func isZeroFlagValue(v string) bool {
+	return v == "" || v == "false" || v == "0"
+}
+
 func parseCommandLineFlags() *appConfig {
 	flags := defineFlags()
+	flag.Usage = doubleDashUsage
 	flag.Parse()
 
 	handleEarlyExitFlags(flags)
