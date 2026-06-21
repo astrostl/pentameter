@@ -6,7 +6,7 @@ var (
 	circuitKeys = []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze}
 	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
 	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyWatts, keyGPM}
-	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp}
+	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp, keyBody, keyCool}
 	sensorKeys  = []string{keySName, keyProbe, keySubTyp}
 )
 
@@ -49,11 +49,17 @@ func pumpFrom(objnam string, params map[string]string) Pump {
 }
 
 func heaterFrom(objnam string, params map[string]string) Heater {
+	status := params[keyStatus]
 	return Heater{
 		ID:      objnam,
 		Name:    params[keySName],
-		On:      params[keyStatus] == statusOn,
+		On:      status == statusOn,
 		SubType: params[keySubTyp],
+		Body:    params[keyBody],
+		Cool:    params[keyCool] == statusOn,
+		// A configured heater reports a concrete STATUS; a pseudo "Preferred"
+		// object echoes the key name (STATUS="STATUS").
+		Real: status == statusOn || status == valueOff,
 	}
 }
 

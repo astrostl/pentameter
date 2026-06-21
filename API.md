@@ -353,6 +353,30 @@ The `GetParamList` command retrieves current operational data for monitoring.
 - **LISTORD**: List order within group
 - **STATIC**: Static mode flag ("ON"/"OFF")
 
+**Heaters (OBJTYP=HEATER):**
+- **SNAME**: Display name ("Pool Heat Pump", "Spa Heater", "UltraTemp Pref")
+- **SUBTYP**: Heater type (ULTRA = heat pump, GENERIC = gas/conventional, SOLAR)
+- **BODY**: Space-separated list of body IDs this heater can serve (e.g. `"B1101"`, or `"B1101 B1202"` for a heater shared across pool + spa)
+- **COOL**: Whether this source can cool as well as heat ("ON" for a heat pump, "OFF" for a gas heater)
+- **STATUS**: Installed/available flag, effectively always `"ON"`. **This is NOT a runtime on/off** — a heater never "turns on" as its own object.
+
+> **Heaters are config objects, not switches.** You do not toggle a heater. A
+> body chooses *which* heater (heat mode) heats it via its **HTSRC** (see
+> "Heater Status" below); turning heat off means setting the body's `HTSRC` to
+> `"00000"`. So a heater's `STATUS` stays `"ON"` whether or not heat is running.
+
+> **Enumerating heat modes for a body:** query all `OBJTYP=HEATER` objects and
+> group them by their `BODY` field (split on spaces). A body's available heat
+> modes = the heaters that list it. 0 heaters = the body has no heating. Each
+> heater the body lists is one selectable mode (set via the body's `HTSRC`).
+
+> **The "Preferred" pseudo-heater:** controllers with a heat pump + a backup
+> heater expose a synthetic heater (e.g. objnam `HXULT`, SNAME "UltraTemp Pref")
+> representing the "use heat pump, fall back to gas" mode. It is a real,
+> selectable `HTSRC` value, but it is a *mode*, not a device — most of its params
+> are placeholder strings echoing the key name (`COOL:"COOL"`, `STATUS:"STATUS"`,
+> etc.). Treat it as a heat-mode option, not a configurable heater.
+
 ## Response Codes
 
 - **200**: Success

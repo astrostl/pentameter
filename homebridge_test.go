@@ -50,6 +50,73 @@ func TestHBCircuitItems(t *testing.T) {
 	}
 }
 
+// TestThermostatAssembly checks per-body thermostat discovery: pseudo heaters are
+// filtered, cool capability comes from the real heater, and heat state maps right.
+func TestThermostatAssembly(t *testing.T) {
+	snap := intellicenter.Snapshot{
+		Bodies: map[string]intellicenter.Body{
+			"B1101": {ID: "B1101", Name: "Pool", Temp: 84, LoSetTemp: 85, HiSetTemp: 92, HeatMode: 4, HeaterID: "H0001"},
+			"B1202": {ID: "B1202", Name: "Spa", Temp: 84, LoSetTemp: 98, HiSetTemp: 104, HeatMode: 0, HeaterID: "00000"},
+			"B9999": {ID: "B9999", Name: "NoHeat", Temp: 70, HeaterID: "00000"},
+		},
+		Heaters: map[string]intellicenter.Heater{
+			"H0001": {ID: "H0001", Name: "Pool Heat Pump", SubType: "ULTRA", Body: "B1101", Cool: true, Real: true},
+			"HXULT": {ID: "HXULT", Name: "UltraTemp Pref", SubType: "HEATER", Body: "B1101", Real: false}, // pseudo
+			"H0002": {ID: "H0002", Name: "Spa Heater", SubType: "GENERIC", Body: "B1202", Cool: false, Real: true},
+		},
+	}
+
+	// Pseudo HXULT is filtered; pool maps to the real heat pump.
+	byBody := realHeatersByBody(snap)
+	if byBody["B1101"].ID != "H0001" {
+		t.Errorf("pool should map to H0001 (real), got %q", byBody["B1101"].ID)
+	}
+	if _, ok := byBody["B9999"]; ok {
+		t.Error("heater-less body should have no heater")
+	}
+
+	items := hbThermostatItems(snap)
+	if len(items) != 2 {
+		t.Fatalf("want 2 thermostats (pool, spa), got %d", len(items))
+	}
+	byID := map[string]hbAccessory{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	pool, spa := byID["B1101"], byID["B1202"]
+	if !pool.CanCool || pool.CoolC == nil {
+		t.Errorf("pool should be cool-capable with a cool setpoint: %+v", pool)
+	}
+	if spa.CanCool || spa.CoolC != nil {
+		t.Errorf("spa is heat-only, should have no cool setpoint: %+v", spa)
+	}
+	if pool.State != hbStateHeat { // HeatMode 4 = heating
+		t.Errorf("pool state: got %q want heat", pool.State)
+	}
+	// B9999 has no heater → no thermostat.
+	if _, ok := byID["B9999"]; ok {
+		t.Error("heater-less body should not get a thermostat")
+	}
+
+	// State mapping spot-checks.
+	cases := []struct {
+		mode int
+		src  string
+		want string
+	}{
+		{4, "H0001", hbStateHeat},
+		{9, "H0001", hbStateCool},
+		{0, "H0001", statusWordIdle},
+		{0, "00000", statusWordOff},
+	}
+	for _, c := range cases {
+		b := intellicenter.Body{HeatMode: c.mode, HeaterID: c.src}
+		if got := bodyHeatState(&b); got != c.want {
+			t.Errorf("bodyHeatState(mode=%d src=%s): got %q want %q", c.mode, c.src, got, c.want)
+		}
+	}
+}
+
 // TestHomebridgeEngineAnnounces drives the engine against a mock and asserts the
 // adapter announces the discovered circuits + ready over the IPC.
 func TestHomebridgeEngineAnnounces(t *testing.T) {

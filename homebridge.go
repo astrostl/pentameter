@@ -19,9 +19,11 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"math"
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -33,10 +35,22 @@ const (
 	hbStdinInitBuf = 64 * 1024   // initial stdin scanner buffer
 	hbStdinMaxBuf  = 1024 * 1024 // max stdin line length
 
-	hbKindSwitch = "switch" // HomeKit accessory kind for a circuit
-	hbMsgReady   = "ready"
-	hbMsgAccess  = "accessories"
-	hbMsgSet     = "set"
+	hbKindSwitch     = "switch"     // HomeKit accessory kind for a circuit
+	hbKindThermostat = "thermostat" // HomeKit accessory kind for a body+heater
+	hbMsgReady       = "ready"
+	hbMsgAccess      = "accessories"
+	hbMsgState       = "state"
+	hbMsgSet         = "set"
+	hbFieldID        = "id"
+
+	hbHeatSrcNone  = "00000" // HTSRC value meaning "no heater assigned" (heat off)
+	hbHeatModeCool = 9       // HTMODE: heat-pump actively cooling
+
+	// Thermostat state strings sent to the shim (off/idle reuse statusWord*).
+	hbStateHeat = "heat"
+	hbStateCool = "cool"
+
+	fToCRound = 10 // round Celsius to 0.1°
 )
 
 type hbAccessory struct {
@@ -44,6 +58,15 @@ type hbAccessory struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
 	On   bool   `json:"on"`
+
+	// Thermostat fields (kind=="thermostat"). Temperatures are Celsius (HomeKit's
+	// internal unit); the shim sets the display unit. Pointers so a real 0 isn't
+	// confused with "absent".
+	CurC    *float64 `json:"curC,omitempty"`  // current water temperature
+	HeatC   *float64 `json:"heatC,omitempty"` // heat setpoint (LOTMP)
+	CoolC   *float64 `json:"coolC,omitempty"` // cool setpoint (HITMP), if CanCool
+	CanCool bool     `json:"canCool,omitempty"`
+	State   string   `json:"state,omitempty"` // off | idle | heat | cool
 }
 
 type hbSet struct {
@@ -78,7 +101,15 @@ func (e *hbEmitter) accessories(items []hbAccessory) {
 }
 
 func (e *hbEmitter) state(id string, on bool) {
-	e.send(map[string]any{"t": "state", "id": id, "on": on})
+	e.send(map[string]any{"t": hbMsgState, hbFieldID: id, "on": on})
+}
+
+// tstate pushes a thermostat's live values (Celsius) on a body change.
+func (e *hbEmitter) tstate(t *hbAccessory) {
+	e.send(map[string]any{
+		"t": "tstate", hbFieldID: t.ID,
+		"curC": t.CurC, "heatC": t.HeatC, "coolC": t.CoolC, "state": t.State,
+	})
 }
 
 // runHomebridge is the entry point for `pentameter -homebridge`. It drives the
@@ -114,13 +145,15 @@ type hbPublisher struct {
 // announce (re)publishes the accessory list with current state and marks the
 // shim ready, mirroring the old per-session announce on each (re)connect.
 func (p *hbPublisher) announce(engine *intellicenter.Engine, out *hbEmitter) {
-	items := hbCircuitItems(engine.Snapshot())
-	out.accessories(items)
+	snap := engine.Snapshot()
+	items := hbCircuitItems(snap)
+	thermos := hbThermostatItems(snap)
+	out.accessories(append(items, thermos...))
 	out.ready()
 	p.mu.Lock()
 	p.published = true
 	p.mu.Unlock()
-	log.Printf("[homebridge] published %d circuits", len(items))
+	log.Printf("[homebridge] published %d circuits, %d thermostats", len(items), len(thermos))
 }
 
 func (p *hbPublisher) isPublished() bool {
@@ -148,8 +181,18 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 // have been announced. Pushes and poll diffs both arrive here.
 func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *hbPublisher) {
 	for ch := range changes {
-		if ch.Circuit != nil && pub.isPublished() {
+		if !pub.isPublished() {
+			continue
+		}
+		switch {
+		case ch.Circuit != nil:
 			out.state(ch.Circuit.ID, ch.Circuit.On)
+		case ch.Body != nil:
+			// Body temp / setpoint / heat-mode changed → refresh its thermostat.
+			// Bodies without a thermostat are simply unknown to the shim, which
+			// ignores the update.
+			t := thermostatStateFromBody(ch.Body)
+			out.tstate(&t)
 		}
 	}
 }
@@ -181,6 +224,102 @@ func hbCircuitItems(snap intellicenter.Snapshot) []hbAccessory {
 		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: hbKindSwitch, On: c.On})
 	}
 	return items
+}
+
+// hbThermostatItems builds one Thermostat per body that has a real (configured,
+// non-pseudo) heater. The heater's COOL flag decides heat-only vs heat+cool.
+// Bodies with no real heater get no thermostat.
+func hbThermostatItems(snap intellicenter.Snapshot) []hbAccessory {
+	heaters := realHeatersByBody(snap)
+
+	ids := make([]string, 0, len(snap.Bodies))
+	for id := range snap.Bodies {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	var items []hbAccessory
+	for _, id := range ids {
+		heater, ok := heaters[id]
+		if !ok {
+			continue
+		}
+		body := snap.Bodies[id]
+		cur := fToC(body.Temp)
+		heat := fToC(body.LoSetTemp)
+		item := hbAccessory{
+			ID: body.ID, Name: body.Name, Kind: hbKindThermostat,
+			CurC: &cur, HeatC: &heat, CanCool: heater.Cool, State: bodyHeatState(&body),
+		}
+		if heater.Cool {
+			cool := fToC(body.HiSetTemp)
+			item.CoolC = &cool
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+// realHeatersByBody maps each body ID to the heater that serves it, skipping
+// pseudo "Preferred" objects. If several real heaters serve one body (a true
+// hybrid), the lowest heater ID wins — deterministic, and good enough until we
+// model multi-source bodies.
+func realHeatersByBody(snap intellicenter.Snapshot) map[string]intellicenter.Heater {
+	ids := make([]string, 0, len(snap.Heaters))
+	for id := range snap.Heaters {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	out := map[string]intellicenter.Heater{}
+	for _, id := range ids {
+		heater := snap.Heaters[id]
+		if !heater.Real {
+			continue // pseudo "Preferred"/combo object
+		}
+		for _, bodyID := range strings.Fields(heater.Body) {
+			if _, taken := out[bodyID]; !taken {
+				out[bodyID] = heater
+			}
+		}
+	}
+	return out
+}
+
+// thermostatStateFromBody builds a thermostat state update (Celsius) from a body
+// alone — used for live pushes, where CanCool was already fixed at announce.
+func thermostatStateFromBody(b *intellicenter.Body) hbAccessory {
+	cur := fToC(b.Temp)
+	heat := fToC(b.LoSetTemp)
+	cool := fToC(b.HiSetTemp)
+	return hbAccessory{ID: b.ID, CurC: &cur, HeatC: &heat, CoolC: &cool, State: bodyHeatState(b)}
+}
+
+// bodyHeatState reports the body's current climate state for HomeKit:
+// off (no heater assigned), heat, cool, or idle (assigned but setpoint satisfied).
+func bodyHeatState(body *intellicenter.Body) string {
+	if body.HeaterID == "" || body.HeaterID == hbHeatSrcNone {
+		return statusWordOff
+	}
+	switch {
+	case body.HeatMode == hbHeatModeCool:
+		return hbStateCool
+	case body.HeatMode >= 1: // heating (1 = heater, 4 = heat pump)
+		return hbStateHeat
+	default:
+		return statusWordIdle // heater assigned, setpoint satisfied
+	}
+}
+
+// fToC converts Fahrenheit (IntelliCenter's unit) to Celsius (HomeKit's unit),
+// rounded to 0.1° to avoid noisy float tails.
+func fToC(f float64) float64 {
+	const (
+		freezeF = 32.0
+		ratio   = 1.8
+	)
+	c := (f - freezeF) / ratio
+	return math.Round(c*fToCRound) / fToCRound
 }
 
 // hbReadStdin parses newline-JSON commands from the shim. If stdin closes the

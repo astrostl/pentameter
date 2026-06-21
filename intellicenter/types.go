@@ -104,7 +104,13 @@ type Heater struct {
 	ID      string
 	Name    string // SNAME
 	On      bool   // STATUS == "ON"
-	SubType string // SUBTYP
+	SubType string // SUBTYP (ULTRA = heat pump, GENERIC = gas, SOLAR)
+	Body    string // BODY: space-separated body IDs this heater serves
+	Cool    bool   // COOL == "ON" (heat pump cooling capability)
+	// Real distinguishes a configured heater device from a "Preferred"/combo
+	// pseudo-object (e.g. HXULT), whose params echo their own key names. A real
+	// heater has a concrete STATUS ("ON"/"OFF"); a pseudo one has STATUS="STATUS".
+	Real bool
 }
 
 // Sensor is a temperature sensor reading (e.g. air _A135).
@@ -159,6 +165,8 @@ const (
 	keyTemp   = "TEMP"
 	keyHTMode = "HTMODE"
 	keyHTSrc  = "HTSRC"
+	keyBody   = "BODY"
+	keyCool   = "COOL"
 	keyRPM    = "RPM"
 	keyWatts  = "WATTS"
 	keyGPM    = "GPM"
