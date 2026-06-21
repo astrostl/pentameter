@@ -97,6 +97,12 @@ type Engine struct {
 	// instead of maintaining its own.
 	OnRawPoll func(req *Client, baseline bool)
 
+	// Resolve, if set, is called before every (re)connect to obtain the current
+	// host. It lets the engine follow an IntelliCenter whose IP changes across
+	// reconnects (mDNS rediscovery). nil = always dial the host given to NewEngine.
+	// A Resolve error is treated like a connect failure: backoff, then retry.
+	Resolve func() (string, error)
+
 	mu     sync.RWMutex
 	kind   map[string]Kind
 	params map[string]map[string]string
@@ -247,6 +253,24 @@ func (e *Engine) setReqClient(c *Client) {
 	e.clientMu.Unlock()
 }
 
+// resolveHost refreshes e.host from the Resolve hook (if set) ahead of a
+// (re)connect. Called only on the Run goroutine, which is the sole reader of
+// e.host, so no lock is needed.
+func (e *Engine) resolveHost() error {
+	if e.Resolve == nil {
+		return nil
+	}
+	host, err := e.Resolve()
+	if err != nil {
+		return err
+	}
+	if host != e.host {
+		e.logf("engine: host resolved to %s", host)
+	}
+	e.host = host
+	return nil
+}
+
 // --- run loop -------------------------------------------------------------
 
 // Run connects, performs an initial baseline scan, then runs the push stream and
@@ -254,6 +278,16 @@ func (e *Engine) setReqClient(c *Client) {
 func (e *Engine) Run(ctx context.Context) error {
 	delay := engineReconnect
 	for ctx.Err() == nil {
+		if err := e.resolveHost(); err != nil {
+			e.logf("engine: resolve host failed: %v", err)
+			e.onScan(err)
+			if !sleepCtx(ctx, delay) {
+				break
+			}
+			delay = nextEngineDelay(delay)
+			continue
+		}
+
 		req := New(e.host, e.port)
 		push := New(e.host, e.port)
 

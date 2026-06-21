@@ -1840,6 +1840,7 @@ type appConfig struct {
 	listenMode        bool
 	homebridge        bool
 	useEngine         bool
+	autoDiscover      bool // no static IP given → (re)discover via mDNS
 	pollInterval      time.Duration
 }
 
@@ -1917,6 +1918,17 @@ func determinePollInterval(pollIntervalSeconds int, listenMode bool) time.Durati
 	return defaultPollInterval * time.Second
 }
 
+// newDiscoveryResolver returns an engine Resolve hook that rediscovers the
+// IntelliCenter via mDNS before each (re)connect, or nil when a static IP was
+// configured (no rediscovery needed). This lets the engine-driven modes follow a
+// controller whose IP changes, matching the legacy paths' attemptRediscovery.
+func newDiscoveryResolver(cfg *appConfig) func() (string, error) {
+	if !cfg.autoDiscover {
+		return nil
+	}
+	return func() (string, error) { return DiscoverIntelliCenter(false) }
+}
+
 func resolveIntelliCenterIP(ip string) string {
 	if ip != "" {
 		return ip
@@ -1947,9 +1959,11 @@ func parseCommandLineFlags() *appConfig {
 		useEngine:         *flags.useEngine,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
 	}
-	// Homebridge mode runs its own resilient discovery loop; other modes resolve
-	// the IP here (which blocks on discovery and Fatals on failure).
-	if !cfg.homebridge {
+	cfg.autoDiscover = cfg.intelliCenterIP == ""
+	// Homebridge mode runs its own resilient discovery loop; the engine paths
+	// rediscover via the engine's Resolve hook. Only the legacy poll/listen paths
+	// resolve the IP here up front (which blocks on discovery and Fatals on failure).
+	if !cfg.homebridge && (!cfg.useEngine || !cfg.autoDiscover) {
 		cfg.intelliCenterIP = resolveIntelliCenterIP(cfg.intelliCenterIP)
 	}
 	return cfg

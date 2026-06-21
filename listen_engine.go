@@ -27,6 +27,7 @@ func runListenEngine(cfg *appConfig) {
 
 	engine := intellicenter.NewEngine(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
 	engine.Logf = log.Printf
+	engine.Resolve = newDiscoveryResolver(cfg)
 
 	engine.OnRawPush = func(msg map[string]any) {
 		pm.mu.Lock()

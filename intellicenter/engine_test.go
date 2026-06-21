@@ -163,6 +163,68 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	waitFor(t, sawRawPush.Load)
 }
 
+// TestEngineResolveDrivesDial verifies the engine dials the host returned by the
+// Resolve hook (not the placeholder passed to NewEngine), and calls it before
+// connecting.
+func TestEngineResolveDrivesDial(t *testing.T) {
+	mock := newEngineMock(t)
+	defer mock.close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(mock.srv.URL, "http://"), ":")
+
+	var resolveCalls atomic.Int32
+	e := NewEngine("placeholder.invalid", port, time.Hour) // host overridden by Resolve
+	e.Resolve = func() (string, error) {
+		resolveCalls.Add(1)
+		return host, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = e.Run(ctx) }()
+
+	// Baseline only succeeds if the engine dialed the resolved host.
+	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
+	if resolveCalls.Load() < 1 {
+		t.Error("Resolve should be called before connecting")
+	}
+}
+
+// TestEngineResolveErrorRetries verifies a Resolve error is treated as a connect
+// failure (reported via OnScan), and the engine retries until Resolve succeeds.
+func TestEngineResolveErrorRetries(t *testing.T) {
+	mock := newEngineMock(t)
+	defer mock.close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(mock.srv.URL, "http://"), ":")
+
+	var sawErr atomic.Bool
+	var calls atomic.Int32
+	e := NewEngine(host, port, time.Hour)
+	e.OnScan = func(err error) {
+		if err != nil {
+			sawErr.Store(true)
+		}
+	}
+	e.Resolve = func() (string, error) {
+		if calls.Add(1) == 1 {
+			return "", errTestResolve
+		}
+		return host, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = e.Run(ctx) }()
+
+	waitFor(t, sawErr.Load) // first resolve failed → OnScan(err)
+	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
+}
+
+var errTestResolve = resolveError("resolve boom")
+
+type resolveError string
+
+func (e resolveError) Error() string { return string(e) }
+
 // --- test helpers ---------------------------------------------------------
 
 func recvChange(t *testing.T, ch <-chan Change) Change {

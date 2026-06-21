@@ -24,6 +24,7 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 	pm := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, false)
 	engine := intellicenter.NewEngine(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
 	engine.Logf = log.Printf
+	engine.Resolve = newDiscoveryResolver(cfg)
 
 	// Serialize recomputes: the push subscriber and the OnScan callback both
 	// drive refreshFromEngine, which mutates shared PoolMonitor metric state.
