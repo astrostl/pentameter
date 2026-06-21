@@ -252,6 +252,7 @@ type PoolMonitor struct {
 	failureThreshold       int        // Number of failures before attempting re-discovery
 	mu                     sync.Mutex // Protects concurrent access in listen mode
 	connected              bool
+	quiet                  bool // Suppress per-object "Updated ..." logs (engine push-driven recomputes)
 	listenMode             bool // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool // Track if freeze protection is currently active
@@ -667,18 +668,19 @@ func (pm *PoolMonitor) getBodyTemperatures() error {
 	if err != nil {
 		return err
 	}
+	pm.applyBodyTemperatures(resp.ObjectList)
+	return nil
+}
 
-	// Update Prometheus metrics and collect heater assignments
+// applyBodyTemperatures updates body metrics and collects heater assignments from
+// a set of body objects (sourced either from a live query or the engine snapshot).
+func (pm *PoolMonitor) applyBodyTemperatures(objs []ObjectData) {
 	referencedHeaters := make(map[string]BodyHeaterInfo)
-
-	for _, obj := range resp.ObjectList {
+	for _, obj := range objs {
 		pm.processBodyObject(obj, referencedHeaters)
 	}
-
 	// Store referenced heaters for heater status processing
 	pm.referencedHeaters = referencedHeaters
-
-	return nil
 }
 
 func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error) {
@@ -793,9 +795,13 @@ func (pm *PoolMonitor) getAirTemperature() error {
 	if err != nil {
 		return fmt.Errorf("air temp request: %w", err)
 	}
+	pm.applyAirTemperature(resp.ObjectList)
+	return nil
+}
 
-	// Update Prometheus metrics
-	for _, obj := range resp.ObjectList {
+// applyAirTemperature updates the air-temperature metric from a set of sensor objects.
+func (pm *PoolMonitor) applyAirTemperature(objs []ObjectData) {
+	for _, obj := range objs {
 		name := obj.Params[keySNAME]
 		tempStr := obj.Params[keyPROBE]
 		subtype := obj.Params[keySUBTYP]
@@ -814,8 +820,6 @@ func (pm *PoolMonitor) getAirTemperature() error {
 			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 	}
-
-	return nil
 }
 
 func (pm *PoolMonitor) getPumpData() error {
@@ -823,15 +827,18 @@ func (pm *PoolMonitor) getPumpData() error {
 	if err != nil {
 		return err
 	}
+	pm.applyPumpData(resp.ObjectList, responseTime)
+	return nil
+}
 
-	// Update Prometheus metrics
-	for _, obj := range resp.ObjectList {
+// applyPumpData updates pump metrics from a set of pump objects. responseTime is
+// for logging only (0 when sourced from the engine snapshot rather than a query).
+func (pm *PoolMonitor) applyPumpData(objs []ObjectData, responseTime time.Duration) {
+	for _, obj := range objs {
 		if err := pm.processPumpObject(obj, responseTime); err != nil {
 			log.Printf("Failed to process pump object %s: %v", obj.ObjName, err)
 		}
 	}
-
-	return nil
 }
 
 func (pm *PoolMonitor) getFreezeProtectionStatus() error {
@@ -850,10 +857,16 @@ func (pm *PoolMonitor) getFreezeProtectionStatus() error {
 	if err != nil {
 		return fmt.Errorf("freeze protection status request: %w", err)
 	}
+	pm.applyFreezeProtection(resp.ObjectList)
+	return nil
+}
 
-	// Check _FEA2 status to determine if freeze protection is active
+// applyFreezeProtection sets freezeProtectionActive from the _FEA2 feature's status.
+// objs may be the dedicated _FEA2 query result or the full circuit set (the engine
+// path passes all circuits; only _FEA2 is inspected).
+func (pm *PoolMonitor) applyFreezeProtection(objs []ObjectData) {
 	pm.freezeProtectionActive = false
-	for _, obj := range resp.ObjectList {
+	for _, obj := range objs {
 		if obj.ObjName == objnamFreezeFeat && obj.Params[keySTATUS] == statusOn {
 			pm.freezeProtectionActive = true
 			pm.logIfNotListeningf("Freeze protection is ACTIVE")
@@ -864,8 +877,6 @@ func (pm *PoolMonitor) getFreezeProtectionStatus() error {
 	if !pm.freezeProtectionActive {
 		pm.logIfNotListeningf("Freeze protection is inactive")
 	}
-
-	return nil
 }
 
 func (pm *PoolMonitor) getCircuitStatus() error {
@@ -873,7 +884,13 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 	if err != nil {
 		return err
 	}
+	pm.applyCircuitStatus(resp.ObjectList)
+	return nil
+}
 
+// applyCircuitStatus updates circuit + feature metrics from a set of circuit
+// objects, then prunes metric series no longer present (stale cleanup).
+func (pm *PoolMonitor) applyCircuitStatus(objs []ObjectData) {
 	// Save previous keys for stale metric cleanup
 	previousCircuitKeys := pm.activeCircuitKeys
 	previousFeatureKeys := pm.activeFeatureKeys
@@ -881,7 +898,7 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 	pm.activeFeatureKeys = make(map[string]bool)
 
 	// Update Prometheus metrics
-	for _, obj := range resp.ObjectList {
+	for _, obj := range objs {
 		pm.processCircuitObject(obj)
 	}
 
@@ -890,8 +907,6 @@ func (pm *PoolMonitor) getCircuitStatus() error {
 
 	// Cleanup stale feature metrics
 	pm.cleanupStaleMetrics(previousFeatureKeys, pm.activeFeatureKeys, featureStatus, "feature")
-
-	return nil
 }
 
 func (pm *PoolMonitor) cleanupStaleMetrics(previous, current map[string]bool, metric *prometheus.GaugeVec, metricType string) {
@@ -1088,13 +1103,15 @@ func (pm *PoolMonitor) getThermalStatus() error {
 	if err != nil {
 		return fmt.Errorf("thermal status request: %w", err)
 	}
+	pm.applyThermalStatus(resp.ObjectList)
+	return nil
+}
 
-	// Process heater data and update metrics
-	for _, obj := range resp.ObjectList {
+// applyThermalStatus updates thermal (heater) metrics from a set of heater objects.
+func (pm *PoolMonitor) applyThermalStatus(objs []ObjectData) {
+	for _, obj := range objs {
 		pm.processHeaterObject(obj)
 	}
-
-	return nil
 }
 
 func (pm *PoolMonitor) getCircuitGroups() error {
@@ -1454,7 +1471,7 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 }
 
 func (pm *PoolMonitor) logIfNotListeningf(format string, v ...interface{}) {
-	if !pm.listenMode {
+	if !pm.listenMode && !pm.quiet {
 		log.Printf(format, v...)
 	}
 }
@@ -1822,6 +1839,7 @@ type appConfig struct {
 	httpPort          string
 	listenMode        bool
 	homebridge        bool
+	useEngine         bool
 	pollInterval      time.Duration
 }
 
@@ -1831,6 +1849,7 @@ type commandLineFlags struct {
 	httpPort          *string
 	listenMode        *bool
 	homebridge        *bool
+	useEngine         *bool
 	pollInterval      *int
 	showVersion       *bool
 	discoverOnly      *bool
@@ -1848,6 +1867,8 @@ func defineFlags() *commandLineFlags {
 			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
 			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
+		useEngine: flag.Bool("engine", getEnvOrDefault("PENTAMETER_ENGINE", "false") == trueString,
+			"Drive metrics from the push-based intellicenter.Engine (real-time gauges; opt-in; env: PENTAMETER_ENGINE)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0), "Temperature polling interval in seconds (env: PENTAMETER_INTERVAL)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
@@ -1923,6 +1944,7 @@ func parseCommandLineFlags() *appConfig {
 		httpPort:          *flags.httpPort,
 		listenMode:        *flags.listenMode,
 		homebridge:        *flags.homebridge,
+		useEngine:         *flags.useEngine,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
 	}
 	// Homebridge mode runs its own resilient discovery loop; other modes resolve
@@ -1984,6 +2006,14 @@ func main() {
 	logStartupMessage(cfg)
 
 	registry := createPrometheusRegistry()
+
+	// Opt-in: serve metrics from the push-based engine instead of the legacy
+	// poll loop. The default path below is unchanged.
+	if cfg.useEngine && !cfg.listenMode {
+		runMetricsEngine(cfg, registry)
+		return
+	}
+
 	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.listenMode)
 	ctx := context.Background()
 
