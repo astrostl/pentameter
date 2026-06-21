@@ -288,49 +288,74 @@ type hbWant struct {
 // what left a stale "optimistic" value stuck before — and (2) logs an explicit
 // is-vs-ought delta when the controller didn't obey.
 func hbApplyThermostat(engine *intellicenter.Engine, cmd hbSet) {
+	body, ok := engine.Snapshot().Bodies[cmd.ID]
+	if !ok {
+		log.Printf("[homebridge] thermostat set for unknown body %s; ignoring", cmd.ID)
+		return
+	}
+
+	// Dedupe against the controller's current value (everything compared in
+	// IntelliCenter's native units: whole °F, heater objnam). HomeKit works in a
+	// 0.5°C grid that doesn't line up with whole °F, so it re-sends slightly
+	// different values that map to the SAME °F; writing those would create a
+	// write -> re-read -> push -> re-set feedback loop. Skipping no-op writes
+	// breaks the loop and keeps redundant writes off the controller.
 	var wants []hbWant
+	attempted := false
+
+	// write issues one field write only when want differs from the controller's
+	// current value (cur), recording a hbWant for post-write verification.
+	write := func(label, want, cur string, apply func() error, got func(*intellicenter.Body) string) {
+		if want == cur {
+			return
+		}
+		attempted = true
+		if err := apply(); err != nil {
+			log.Printf("[homebridge] %s %s failed: %v", label, cmd.ID, err)
+		}
+		wants = append(wants, hbWant{label: label, want: want, got: got})
+	}
 
 	if cmd.HeatC != nil {
 		tempF := cToF(*cmd.HeatC)
-		if err := engine.SetHeatSetpoint(cmd.ID, tempF); err != nil {
-			log.Printf("[homebridge] heat setpoint %s failed: %v", cmd.ID, err)
-		}
-		wants = append(wants, hbWant{
-			label: "heat setpoint (LOTMP)", want: itoa(tempF),
-			got: func(b *intellicenter.Body) string { return itoa(int(b.LoSetTemp)) },
-		})
+		write("heat setpoint (LOTMP)", itoa(tempF), itoa(int(body.LoSetTemp)),
+			func() error { return engine.SetHeatSetpoint(cmd.ID, tempF) },
+			func(b *intellicenter.Body) string { return itoa(int(b.LoSetTemp)) })
 	}
 	if cmd.CoolC != nil {
 		tempF := cToF(*cmd.CoolC)
-		if err := engine.SetCoolSetpoint(cmd.ID, tempF); err != nil {
-			log.Printf("[homebridge] cool setpoint %s failed: %v", cmd.ID, err)
-		}
-		wants = append(wants, hbWant{
-			label: "cool setpoint (HITMP)", want: itoa(tempF),
-			got: func(b *intellicenter.Body) string { return itoa(int(b.HiSetTemp)) },
-		})
+		write("cool setpoint (HITMP)", itoa(tempF), itoa(int(body.HiSetTemp)),
+			func() error { return engine.SetCoolSetpoint(cmd.ID, tempF) },
+			func(b *intellicenter.Body) string { return itoa(int(b.HiSetTemp)) })
 	}
 	if cmd.Mode != "" {
-		src := intellicenter.HeatSourceNone
-		if cmd.Mode == hbModeOn {
-			heaters := realHeatersByBody(engine.Snapshot())
-			heater, ok := heaters[cmd.ID]
-			if !ok {
-				log.Printf("[homebridge] mode on for %s: no real heater; ignoring", cmd.ID)
-				return
-			}
-			src = heater.ID
+		if src, ok := hbHeatSourceFor(engine, cmd); ok {
+			write("heat source (HTSRC)", src, body.HeaterID,
+				func() error { return engine.SetHeatSource(cmd.ID, src) },
+				func(b *intellicenter.Body) string { return b.HeaterID })
 		}
-		if err := engine.SetHeatSource(cmd.ID, src); err != nil {
-			log.Printf("[homebridge] heat source %s=%s failed: %v", cmd.ID, src, err)
-		}
-		wants = append(wants, hbWant{
-			label: "heat source (HTSRC)", want: src,
-			got: func(b *intellicenter.Body) string { return b.HeaterID },
-		})
 	}
 
-	hbVerifyBody(engine, cmd.ID, wants)
+	// Only re-read/re-emit when we actually wrote something; echoing state on a
+	// no-op is exactly what would re-feed the loop.
+	if attempted {
+		hbVerifyBody(engine, cmd.ID, wants)
+	}
+}
+
+// hbHeatSourceFor resolves the HTSRC value a mode command wants: the body's real
+// heater objnam for "on", or HeatSourceNone for "off". ok is false when "on" is
+// asked for a body with no real heater (nothing to assign).
+func hbHeatSourceFor(engine *intellicenter.Engine, cmd hbSet) (string, bool) {
+	if cmd.Mode != hbModeOn {
+		return intellicenter.HeatSourceNone, true
+	}
+	heater, found := realHeatersByBody(engine.Snapshot())[cmd.ID]
+	if !found {
+		log.Printf("[homebridge] mode on for %s: no real heater; ignoring", cmd.ID)
+		return "", false
+	}
+	return heater.ID, true
 }
 
 // hbVerifyBody re-reads the body from the controller (which force-emits its true
@@ -395,13 +420,13 @@ func hbThermostatItems(snap intellicenter.Snapshot) []hbAccessory {
 		}
 		body := snap.Bodies[id]
 		cur := fToC(body.Temp)
-		heat := fToC(body.LoSetTemp)
+		heat := fToCStep(body.LoSetTemp)
 		item := hbAccessory{
 			ID: body.ID, Name: body.Name, Kind: hbKindThermostat,
 			CurC: &cur, HeatC: &heat, CanCool: heater.Cool, State: bodyHeatState(&body),
 		}
 		if heater.Cool {
-			cool := fToC(body.HiSetTemp)
+			cool := fToCStep(body.HiSetTemp)
 			item.CoolC = &cool
 		}
 		items = append(items, item)
@@ -439,8 +464,8 @@ func realHeatersByBody(snap intellicenter.Snapshot) map[string]intellicenter.Hea
 // alone — used for live pushes, where CanCool was already fixed at announce.
 func thermostatStateFromBody(b *intellicenter.Body) hbAccessory {
 	cur := fToC(b.Temp)
-	heat := fToC(b.LoSetTemp)
-	cool := fToC(b.HiSetTemp)
+	heat := fToCStep(b.LoSetTemp)
+	cool := fToCStep(b.HiSetTemp)
 	return hbAccessory{ID: b.ID, CurC: &cur, HeatC: &heat, CoolC: &cool, State: bodyHeatState(b)}
 }
 
@@ -469,6 +494,19 @@ func fToC(f float64) float64 {
 	)
 	c := (f - freezeF) / ratio
 	return math.Round(c*fToCRound) / fToCRound
+}
+
+// fToCStep converts a setpoint to Celsius snapped to HomeKit's 0.5° grid (its
+// thermostat minStep). Pushing grid-aligned values stops HomeKit from coercing
+// an off-grid value and re-sending it — the source of the setpoint feedback loop.
+func fToCStep(tempF float64) float64 {
+	const (
+		freezeF  = 32.0
+		ratio    = 1.8
+		halfStep = 2.0 // round to nearest 0.5 == round(x*2)/2
+	)
+	c := (tempF - freezeF) / ratio
+	return math.Round(c*halfStep) / halfStep
 }
 
 // cToF converts a HomeKit Celsius setpoint to the nearest whole Fahrenheit
