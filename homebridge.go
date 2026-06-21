@@ -53,10 +53,17 @@ const (
 
 	hbSubTypeFreeze = "FRZ"               // SUBTYP of the freeze-protection feature circuit (_FEA2)
 	hbFreezeName    = "Freeze Protection" // display name for the freeze occupancy sensor
-	hbSensorRPM     = "rpm"
-	hbSensorWatts   = "watts"
-	hbSensorGPM     = "gpm"
-	hbSensorRun     = "run" // suffix for a pump's "running" occupancy sensor
+
+	// Connection-health sensor: a synthetic OccupancySensor, "detected" when the
+	// sidecar is connected to the controller. Driven by the engine's scan result
+	// (Go) and by the shim on sidecar process death. hbConnID is shared with the
+	// shim (CONNECTION_ID) so it can flip the sensor offline when Go can't.
+	hbConnID      = "_conn"
+	hbConnName    = "Pool Controller Online"
+	hbSensorRPM   = "rpm"
+	hbSensorWatts = "watts"
+	hbSensorGPM   = "gpm"
+	hbSensorRun   = "run" // suffix for a pump's "running" occupancy sensor
 
 	hbModeOn = "on" // tset mode: assign the body's heater (vs "off" = no heater)
 
@@ -230,7 +237,11 @@ func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
 	items = append(items, hbPumpSensorItems(snap)...)
 	items = append(items, hbPumpRunningItems(snap)...)
 	items = append(items, hbSensorItems(snap)...)
-	return append(items, hbFreezeItems(snap)...)
+	items = append(items, hbFreezeItems(snap)...)
+	// Connection-health sensor. Announce happens only after a successful baseline,
+	// so we're connected at announce time → On (detected) = true. Live changes flow
+	// via OnScan -> state(hbConnID, ...).
+	return append(items, hbAccessory{ID: hbConnID, Name: hbConnName, Kind: hbKindOccupancy, On: true})
 }
 
 // hbSensorItems builds a read-only TemperatureSensor per valid temperature sensor
@@ -353,6 +364,20 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 			pub.announce(engine, out)
 		} else {
 			pub.resync(engine, out)
+		}
+	}
+	// Connection health: report connected/disconnected to the shim on change.
+	// OnScan fires nil on every successful scan and an error on connect/session
+	// failure. Emit only on change (and only once announced) to avoid spam.
+	lastConn, firstScan := false, true
+	engine.OnScan = func(err error) {
+		connected := err == nil
+		if !firstScan && connected == lastConn {
+			return
+		}
+		firstScan, lastConn = false, connected
+		if pub.isPublished() {
+			out.state(hbConnID, connected)
 		}
 	}
 	go hbForwardChanges(engine.Subscribe(), out, pub)

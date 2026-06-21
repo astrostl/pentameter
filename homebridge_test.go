@@ -308,11 +308,16 @@ func TestHomebridgeEngineAnnounces(t *testing.T) {
 			gotReady = true
 		case "accessories":
 			gotAccessories = true
-			if len(msg.Items) != 2 || msg.Items[0].ID != "C0001" || !msg.Items[0].On {
+			// 2 circuits + the always-present connection-health sensor.
+			if len(msg.Items) != 3 || msg.Items[0].ID != "C0001" || !msg.Items[0].On {
 				t.Errorf("accessories payload wrong: %+v", msg.Items)
 			}
 			if msg.Items[1].ID != "C0002" || msg.Items[1].On {
 				t.Errorf("second accessory wrong: %+v", msg.Items[1])
+			}
+			conn := msg.Items[2]
+			if conn.ID != hbConnID || conn.Kind != hbKindOccupancy || !conn.On {
+				t.Errorf("connection sensor wrong: %+v", conn)
 			}
 		}
 	}
