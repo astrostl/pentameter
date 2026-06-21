@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/astrostl/pentameter/intellicenter"
+	"github.com/gorilla/websocket"
 )
 
 // syncBuffer is a goroutine-safe bytes.Buffer for capturing emitter output.
@@ -265,6 +268,89 @@ func TestAccessorySignature(t *testing.T) {
 	if accessorySignature(heat) == accessorySignature(cool) {
 		t.Error("cool-capability flip should change the signature")
 	}
+}
+
+// closableMock is a mock IntelliCenter that exposes its live WebSocket
+// connections so a test can sever them mid-session (httptest.Server.Close leaves
+// hijacked WebSockets open, so it can't simulate a controller dropping).
+type closableMock struct {
+	srv   *httptest.Server
+	mu    sync.Mutex
+	conns []*websocket.Conn
+}
+
+func newClosableMock(responses map[string]IntelliCenterResponse) *closableMock {
+	m := &closableMock{}
+	up := websocket.Upgrader{CheckOrigin: func(_ *http.Request) bool { return true }}
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		m.mu.Lock()
+		m.conns = append(m.conns, conn)
+		m.mu.Unlock()
+		defer conn.Close()
+		for {
+			var req IntelliCenterRequest
+			if err := conn.ReadJSON(&req); err != nil {
+				return
+			}
+			resp, ok := responses[req.Command+":"+req.Condition]
+			if !ok {
+				resp = IntelliCenterResponse{Command: req.Command}
+			}
+			resp.MessageID = req.MessageID
+			if resp.Response == "" {
+				resp.Response = "200"
+			}
+			if err := conn.WriteJSON(resp); err != nil {
+				return
+			}
+		}
+	}))
+	return m
+}
+
+func (m *closableMock) severConns() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.conns {
+		_ = c.Close()
+	}
+}
+
+// TestHomebridgeConnectionGoesOfflineOnDisconnect drives the engine against a
+// mock, waits for the baseline announce (connection sensor online), then severs
+// the connection mid-session and asserts the connection sensor is reported
+// offline — the controller-unreachable path (engine OnScan error), which can't
+// be forced from a live network in the sandbox.
+func TestHomebridgeConnectionGoesOfflineOnDisconnect(t *testing.T) {
+	responses := map[string]IntelliCenterResponse{
+		"GetParamList:OBJTYP=CIRCUIT": {ObjectList: []ObjectData{
+			{ObjName: "C0001", Params: map[string]string{"SNAME": "Pool Light", "STATUS": "ON", "OBJTYP": "CIRCUIT", "SUBTYP": "LIGHT", "FEATR": "ON"}},
+		}},
+	}
+	mock := newClosableMock(responses)
+	defer mock.srv.Close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(mock.srv.URL, "http://"), ":")
+	engine := intellicenter.NewEngine(host, port, 200*time.Millisecond)
+
+	var buf syncBuffer
+	out := newHBEmitter(&buf)
+	cmds := make(chan hbSet, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hbRun(ctx, engine, out, cmds)
+
+	// Baseline announce → the connection sensor exists and is online.
+	waitForCond(t, func() bool { return strings.Contains(buf.String(), `"t":"accessories"`) })
+
+	// Sever the live connections: the engine session drops, OnScan(err) fires,
+	// and the connection sensor must be reported offline.
+	mock.severConns()
+	waitForCond(t, func() bool { return strings.Contains(buf.String(), `"id":"_conn","on":false`) })
+	cancel()
 }
 
 // TestHomebridgeEngineAnnounces drives the engine against a mock and asserts the
