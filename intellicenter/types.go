@@ -92,12 +92,16 @@ type Body struct {
 
 // Pump is a pump (objnam PMP##). Watts/GPM are poll-only (never pushed).
 type Pump struct {
-	ID    string
-	Name  string  // SNAME
-	On    bool    // STATUS == "ON"
-	RPM   float64 // RPM
-	Watts float64 // WATTS
-	GPM   float64 // GPM
+	ID   string
+	Name string // SNAME
+	// On means the pump is running. Pump STATUS is a numeric code ("10" when
+	// running), not "ON", so on/off is derived from RPM > 0 — the unambiguous
+	// "is it spinning" signal.
+	On     bool
+	RPM    float64 // RPM (current speed)
+	MaxRPM float64 // MAX (configured maximum speed)
+	Watts  float64 // WATTS
+	GPM    float64 // GPM
 }
 
 // Heater is a heater (objnam H####).
@@ -171,6 +175,7 @@ const (
 	keyBody   = "BODY"
 	keyCool   = "COOL"
 	keyRPM    = "RPM"
+	keyMax    = "MAX"
 	keyWatts  = "WATTS"
 	keyGPM    = "GPM"
 

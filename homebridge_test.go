@@ -118,6 +118,38 @@ func TestThermostatAssembly(t *testing.T) {
 	}
 }
 
+// TestHBPumpItems verifies pumps map to read-only Fans, sorted by ID, with RPM
+// scaled onto HomeKit's 0-100 RotationSpeed and the raw RPM carried alongside.
+func TestHBPumpItems(t *testing.T) {
+	snap := intellicenter.Snapshot{Pumps: map[string]intellicenter.Pump{
+		// % is of each pump's OWN configured max (MaxRPM), not a global constant.
+		// On mirrors what parse sets (RPM > 0 == running).
+		"PMP02": {ID: "PMP02", Name: "VS Pump", On: true, RPM: 1500, MaxRPM: 3000},   // 50%
+		"PMP01": {ID: "PMP01", Name: "Pool Pump", On: true, RPM: 3450, MaxRPM: 3450}, // 100%
+		"PMP03": {ID: "PMP03", Name: "Idle Pump", On: false, RPM: 0, MaxRPM: 3450},   // off
+	}}
+	items := hbPumpItems(snap)
+	if len(items) != 3 {
+		t.Fatalf("want 3 fan items, got %d", len(items))
+	}
+	if items[0].ID != "PMP01" || items[1].ID != "PMP02" || items[2].ID != "PMP03" {
+		t.Errorf("pumps not sorted by ID: %+v", items)
+	}
+	first := items[0]
+	if first.Kind != hbKindFan || first.Name != "Pool Pump" || !first.On {
+		t.Errorf("first fan wrong: %+v", first)
+	}
+	if first.Pct == nil || *first.Pct != 100 || first.RPM == nil || *first.RPM != 3450 {
+		t.Errorf("max-RPM pump should be 100%% / 3450 RPM: pct=%v rpm=%v", first.Pct, first.RPM)
+	}
+	if !items[1].On || items[1].Pct == nil || *items[1].Pct != 50 { // 1500 / 3000 = 50%
+		t.Errorf("half of its own max should be 50%% and on: %+v", items[1])
+	}
+	if items[2].On || items[2].Pct == nil || *items[2].Pct != 0 {
+		t.Errorf("idle pump should be off at 0%%: %+v", items[2])
+	}
+}
+
 // TestCToF checks the HomeKit-Celsius -> IntelliCenter-Fahrenheit conversion
 // rounds to whole degrees and round-trips the common pool setpoints.
 func TestCToF(t *testing.T) {

@@ -38,12 +38,20 @@ const (
 
 	hbKindSwitch     = "switch"     // HomeKit accessory kind for a circuit
 	hbKindThermostat = "thermostat" // HomeKit accessory kind for a body+heater
+	hbKindFan        = "fan"        // HomeKit accessory kind for a pump (read-only Fan)
 	hbMsgReady       = "ready"
 	hbMsgAccess      = "accessories"
 	hbMsgState       = "state"
+	hbMsgFState      = "fstate" // sidecar -> shim pump (fan) state
 	hbMsgSet         = "set"
 	hbMsgTSet        = "tset" // shim -> sidecar thermostat command
 	hbFieldID        = "id"
+	hbFieldOn        = "on"
+
+	// hbPumpMaxRPM is the conventional Pentair VSP top speed, used only to scale
+	// RPM onto HomeKit's 0-100 RotationSpeed (a Fan has no raw-RPM characteristic).
+	hbPumpMaxRPM = 3450.0
+	hbPctFull    = 100
 
 	hbModeOn = "on" // tset mode: assign the body's heater (vs "off" = no heater)
 
@@ -71,6 +79,12 @@ type hbAccessory struct {
 	CoolC   *float64 `json:"coolC,omitempty"` // cool setpoint (HITMP), if CanCool
 	CanCool bool     `json:"canCool,omitempty"`
 	State   string   `json:"state,omitempty"` // off | idle | heat | cool
+
+	// Pump (fan) fields (kind=="fan"). Pct is RPM scaled to HomeKit's 0-100
+	// RotationSpeed; RPM is the raw value (logging / future use). Pointers so a
+	// real 0 (pump off) isn't confused with "absent".
+	Pct *int `json:"pct,omitempty"`
+	RPM *int `json:"rpm,omitempty"`
 }
 
 type hbSet struct {
@@ -112,7 +126,13 @@ func (e *hbEmitter) accessories(items []hbAccessory) {
 }
 
 func (e *hbEmitter) state(id string, on bool) {
-	e.send(map[string]any{"t": hbMsgState, hbFieldID: id, "on": on})
+	e.send(map[string]any{"t": hbMsgState, hbFieldID: id, hbFieldOn: on})
+}
+
+// fstate pushes a pump's live values: on/off and RPM (both the 0-100 scaled
+// RotationSpeed and the raw RPM). Pumps are poll-only, so this arrives on poll.
+func (e *hbEmitter) fstate(id string, on bool, pct, rpm int) {
+	e.send(map[string]any{"t": hbMsgFState, hbFieldID: id, hbFieldOn: on, "pct": pct, "rpm": rpm})
 }
 
 // tstate pushes a thermostat's live values (Celsius) on a body change.
@@ -194,10 +214,49 @@ func (p *hbPublisher) isPublished() bool {
 	return p.published
 }
 
-// hbAllItems is the full announced accessory list: circuits (Features) then
-// thermostats, each already sorted by ID for stable output.
+// hbAllItems is the full announced accessory list: circuits (Features),
+// thermostats, then pumps, each already sorted by ID for stable output.
 func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
-	return append(hbCircuitItems(snap), hbThermostatItems(snap)...)
+	items := append(hbCircuitItems(snap), hbThermostatItems(snap)...)
+	return append(items, hbPumpItems(snap)...)
+}
+
+// hbPumpItems builds one read-only Fan per pump, sorted by ID. RotationSpeed
+// carries RPM scaled to 0-100 (HomeKit has no raw-RPM characteristic); the shim
+// exposes the Fan read-only so it can't be toggled or dragged.
+func hbPumpItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Pumps))
+	for id := range snap.Pumps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]hbAccessory, 0, len(ids))
+	for _, id := range ids {
+		pump := snap.Pumps[id]
+		pct := rpmToPct(pump.RPM, pump.MaxRPM)
+		rpm := int(math.Round(pump.RPM))
+		items = append(items, hbAccessory{
+			ID: pump.ID, Name: pump.Name, Kind: hbKindFan, On: pump.On, Pct: &pct, RPM: &rpm,
+		})
+	}
+	return items
+}
+
+// rpmToPct scales a pump RPM onto HomeKit's 0-100 RotationSpeed as a percentage
+// of the pump's configured maximum (MAX). Falls back to the conventional VSP top
+// speed if the controller didn't report a max. Clamped to [0,100].
+func rpmToPct(rpm, maxRPM float64) int {
+	if rpm <= 0 {
+		return 0
+	}
+	if maxRPM <= 0 {
+		maxRPM = hbPumpMaxRPM
+	}
+	pct := int(math.Round(rpm / maxRPM * hbPctFull))
+	if pct > hbPctFull {
+		return hbPctFull
+	}
+	return pct
 }
 
 // accessorySignature captures the membership-relevant identity of the accessory
@@ -254,6 +313,9 @@ func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *
 			// ignores the update.
 			t := thermostatStateFromBody(ch.Body)
 			out.tstate(&t)
+		case ch.Pump != nil:
+			// Pump RPM changed (poll-only) → refresh its read-only Fan.
+			out.fstate(ch.Pump.ID, ch.Pump.On, rpmToPct(ch.Pump.RPM, ch.Pump.MaxRPM), int(math.Round(ch.Pump.RPM)))
 		}
 	}
 }
