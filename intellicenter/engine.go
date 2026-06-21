@@ -490,6 +490,14 @@ func (e *Engine) kindOf(objnam string) (Kind, bool) {
 // applyAndEmit merges partial params for an object, reparses it, and emits a
 // Change if the typed value changed.
 func (e *Engine) applyAndEmit(kind Kind, objnam string, partial map[string]string) {
+	e.apply(kind, objnam, partial, false)
+}
+
+// apply merges partial params, reparses, and emits a Change. When force is true
+// it emits even if the typed value is unchanged — used after a write so a
+// subscriber (HomeKit) is corrected to the controller's actual state even when a
+// rejected/ineffective write left that state unchanged.
+func (e *Engine) apply(kind Kind, objnam string, partial map[string]string, force bool) {
 	e.mu.Lock()
 	cur := e.params[objnam]
 	if cur == nil {
@@ -503,9 +511,29 @@ func (e *Engine) applyAndEmit(kind Kind, objnam string, partial map[string]strin
 	change, changed := e.reparseLocked(kind, objnam, cur)
 	e.mu.Unlock()
 
-	if changed {
+	if changed || force {
 		e.emit(change)
 	}
+}
+
+// RefreshBody re-reads a single body from the controller and force-emits its
+// current state, so callers can verify a write took effect and subscribers
+// reflect the controller's truth immediately (within one round-trip, not one
+// poll interval). No-op if the body isn't found in the response.
+func (e *Engine) RefreshBody(bodyID string) error {
+	return e.withReqClient(func(c *Client) error {
+		objs, err := c.query(string(KindBody), condBody, bodyKeys)
+		if err != nil {
+			return err
+		}
+		for _, o := range objs {
+			if o.ObjName == bodyID && o.Params[keySName] != "" {
+				e.apply(KindBody, bodyID, o.Params, true)
+				return nil
+			}
+		}
+		return nil
+	})
 }
 
 // diffStore stores v under id and reports whether it differs from the prior value.

@@ -361,14 +361,16 @@ The `GetParamList` command retrieves current operational data for monitoring.
 - **STATUS**: Installed/available flag, effectively always `"ON"`. **This is NOT a runtime on/off** — a heater never "turns on" as its own object.
 
 > **Heaters are config objects, not switches.** You do not toggle a heater. A
-> body chooses *which* heater (heat mode) heats it via its **HTSRC** (see
-> "Heater Status" below); turning heat off means setting the body's `HTSRC` to
-> `"00000"`. So a heater's `STATUS` stays `"ON"` whether or not heat is running.
+> body's current heat source is reported (read-only) by its **HTSRC**; you change
+> it by **writing the `HEATER` param** on the body (assign a heater objnam = on,
+> `"00000"` = off — see "Writing Heat State" below; do **not** write `HTSRC`). So a
+> heater's `STATUS` stays `"ON"` whether or not heat is running.
 
 > **Enumerating heat modes for a body:** query all `OBJTYP=HEATER` objects and
 > group them by their `BODY` field (split on spaces). A body's available heat
 > modes = the heaters that list it. 0 heaters = the body has no heating. Each
-> heater the body lists is one selectable mode (set via the body's `HTSRC`).
+> heater the body lists is one selectable mode (select by writing the body's
+> `HEATER` param to that heater's objnam).
 
 > **The "Preferred" pseudo-heater:** controllers with a heat pump + a backup
 > heater expose a synthetic heater (e.g. objnam `HXULT`, SNAME "UltraTemp Pref")
@@ -691,21 +693,32 @@ All three writes target the body objnam (e.g. `B1101`); values are strings.
 |------|-------|-------|
 | Heat setpoint | `LOTMP` | whole °F, e.g. `"85"` |
 | Cool setpoint (heat pump) | `HITMP` | whole °F, e.g. `"92"` |
-| Turn heat on | `HTSRC` | heater objnam, e.g. `"H0001"` |
-| Turn heat off | `HTSRC` | `"00000"` |
+| Turn heat on | `HEATER` | heater objnam, e.g. `"H0001"` |
+| Turn heat off | `HEATER` | `"00000"` |
+
+> **⚠️ Write `HEATER`, never `HTSRC`.** `HTSRC` is the **read-only** status param
+> reporting the body's current heat source. The **writable** param is `HEATER`.
+> Writing `HTSRC` is **rejected with `response=404`** — and a rejected SetParamList
+> can make the controller **drop all client sessions** (local *and* cloud
+> intellicenter2.com) for several seconds before it recovers. The controller keeps
+> running, but treat write correctness as safety-critical. (Confirmed the hard way:
+> an `HTSRC` write 404'd and knocked every client offline.) The legacy plugin's
+> code writes `HEATER`; mirror it.
 
 ```json
 {"command": "SetParamList", "objectList": [
-  {"objnam": "B1101", "params": {"HTSRC": "H0001"}}
+  {"objnam": "B1101", "params": {"HEATER": "H0001"}}
 ]}
 ```
 
 Notes:
+- The write goes to **the body** (e.g. `B1101`), not the heater object.
 - There is no separate heat/cool *mode* write — a heat pump chooses heating vs
   cooling itself from where `TEMP` sits relative to the `LOTMP`/`HITMP` band. The
-  only mode knob is `HTSRC` (assign a heater = on, `"00000"` = off).
+  only mode knob is `HEATER` (assign a heater = on, `"00000"` = off).
 - Confirmation arrives as an unsolicited `WriteParamList` push reflecting the new
-  `HTSRC`/`LOTMP`/`HITMP`/`HTMODE` — no re-poll needed.
+  `HTSRC`/`LOTMP`/`HITMP`/`HTMODE` — no re-poll needed. (The push reports `HTSRC`,
+  the read-side mirror of the `HEATER` you wrote.)
 
 ## Heat Pump Detection and Monitoring
 

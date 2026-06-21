@@ -185,16 +185,17 @@ func TestSetHeatControls(t *testing.T) {
 	if f.lastSet.ObjectList[0].Params["HITMP"] != "92" {
 		t.Errorf("cool setpoint wrong: %+v", f.lastSet)
 	}
+	// Heat source writes the writable HEATER param, NOT read-only HTSRC.
 	if err := c.SetHeatSource("B1101", "H0001"); err != nil {
 		t.Fatalf("SetHeatSource: %v", err)
 	}
-	if f.lastSet.ObjectList[0].Params["HTSRC"] != "H0001" {
-		t.Errorf("heat source wrong: %+v", f.lastSet)
+	if obj := f.lastSet.ObjectList[0]; obj.Params["HEATER"] != "H0001" || obj.Params["HTSRC"] != "" {
+		t.Errorf("heat source should write HEATER not HTSRC: %+v", f.lastSet)
 	}
 	if err := c.SetHeatSource("B1101", HeatSourceNone); err != nil {
 		t.Fatalf("SetHeatSource off: %v", err)
 	}
-	if f.lastSet.ObjectList[0].Params["HTSRC"] != "00000" {
+	if f.lastSet.ObjectList[0].Params["HEATER"] != "00000" {
 		t.Errorf("heat source off wrong: %+v", f.lastSet)
 	}
 }

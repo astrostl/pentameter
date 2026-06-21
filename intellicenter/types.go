@@ -166,7 +166,8 @@ const (
 	keySubTyp = "SUBTYP"
 	keyTemp   = "TEMP"
 	keyHTMode = "HTMODE"
-	keyHTSrc  = "HTSRC"
+	keyHTSrc  = "HTSRC"  // read-only: the body's currently-assigned heat source
+	keyHeater = "HEATER" // writable: assign/clear a body's heat source (HTSRC is NOT writable)
 	keyBody   = "BODY"
 	keyCool   = "COOL"
 	keyRPM    = "RPM"

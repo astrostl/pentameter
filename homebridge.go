@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -272,18 +273,42 @@ func hbApplySets(engine *intellicenter.Engine, cmds <-chan hbSet) {
 	}
 }
 
+// hbWant records an intended ("ought") body value for one HomeKit command, so we
+// can reconcile it against the controller's actual ("is") state after the write.
+type hbWant struct {
+	label string // human label for logs, e.g. "heat setpoint"
+	want  string // intended value, stringified to match the read-side param
+	got   func(*intellicenter.Body) string
+}
+
 // hbApplyThermostat applies one thermostat command (any subset of heat setpoint,
-// cool setpoint, on/off mode) to a body via the engine.
+// cool setpoint, on/off mode) to a body, then verifies the controller actually
+// took the change. The verify step (1) corrects HomeKit to the controller's real
+// state immediately — even when a write is rejected and nothing changed, which is
+// what left a stale "optimistic" value stuck before — and (2) logs an explicit
+// is-vs-ought delta when the controller didn't obey.
 func hbApplyThermostat(engine *intellicenter.Engine, cmd hbSet) {
+	var wants []hbWant
+
 	if cmd.HeatC != nil {
-		if err := engine.SetHeatSetpoint(cmd.ID, cToF(*cmd.HeatC)); err != nil {
+		tempF := cToF(*cmd.HeatC)
+		if err := engine.SetHeatSetpoint(cmd.ID, tempF); err != nil {
 			log.Printf("[homebridge] heat setpoint %s failed: %v", cmd.ID, err)
 		}
+		wants = append(wants, hbWant{
+			label: "heat setpoint (LOTMP)", want: itoa(tempF),
+			got: func(b *intellicenter.Body) string { return itoa(int(b.LoSetTemp)) },
+		})
 	}
 	if cmd.CoolC != nil {
-		if err := engine.SetCoolSetpoint(cmd.ID, cToF(*cmd.CoolC)); err != nil {
+		tempF := cToF(*cmd.CoolC)
+		if err := engine.SetCoolSetpoint(cmd.ID, tempF); err != nil {
 			log.Printf("[homebridge] cool setpoint %s failed: %v", cmd.ID, err)
 		}
+		wants = append(wants, hbWant{
+			label: "cool setpoint (HITMP)", want: itoa(tempF),
+			got: func(b *intellicenter.Body) string { return itoa(int(b.HiSetTemp)) },
+		})
 	}
 	if cmd.Mode != "" {
 		src := intellicenter.HeatSourceNone
@@ -299,8 +324,37 @@ func hbApplyThermostat(engine *intellicenter.Engine, cmd hbSet) {
 		if err := engine.SetHeatSource(cmd.ID, src); err != nil {
 			log.Printf("[homebridge] heat source %s=%s failed: %v", cmd.ID, src, err)
 		}
+		wants = append(wants, hbWant{
+			label: "heat source (HTSRC)", want: src,
+			got: func(b *intellicenter.Body) string { return b.HeaterID },
+		})
+	}
+
+	hbVerifyBody(engine, cmd.ID, wants)
+}
+
+// hbVerifyBody re-reads the body from the controller (which force-emits its true
+// state to HomeKit, undoing any optimistic display) and logs any field where the
+// controller's actual value doesn't match what HomeKit asked for.
+func hbVerifyBody(engine *intellicenter.Engine, bodyID string, wants []hbWant) {
+	if err := engine.RefreshBody(bodyID); err != nil {
+		log.Printf("[homebridge] verify %s: re-read failed: %v", bodyID, err)
+		return
+	}
+	body, ok := engine.Snapshot().Bodies[bodyID]
+	if !ok {
+		return
+	}
+	for _, w := range wants {
+		if got := w.got(&body); got != w.want {
+			log.Printf("[homebridge] STATE DELTA on %s: HomeKit asked %s=%s but controller reports %s "+
+				"(write not applied; HomeKit corrected to controller state)", bodyID, w.label, w.want, got)
+		}
 	}
 }
+
+// itoa is strconv.Itoa, aliased locally to keep call sites terse.
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // hbCircuitItems builds the accessory list from an engine snapshot, sorted by ID
 // for stable output across (re)announces.

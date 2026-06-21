@@ -39,10 +39,13 @@ func (c *Client) SetCoolSetpoint(bodyObjnam string, highTempF int) error {
 	return c.SetParams(bodyObjnam, map[string]string{keyHiTmp: fmt.Sprintf("%d", highTempF)})
 }
 
-// SetHeatSource assigns a body's heat source (HTSRC). Pass a heater objnam to
-// enable that heater, or HeatSourceNone to turn heating off.
+// SetHeatSource assigns a body's heat source. Pass a heater objnam to enable
+// that heater, or HeatSourceNone to turn heating off. The write targets the
+// writable HEATER param; the controller reflects it on the read-only HTSRC.
+// (Writing HTSRC directly is rejected with a 404 — and a rejected write can make
+// the controller drop its client sessions, so the param MUST be correct.)
 func (c *Client) SetHeatSource(bodyObjnam, heaterObjnam string) error {
-	return c.SetParams(bodyObjnam, map[string]string{keyHTSrc: heaterObjnam})
+	return c.SetParams(bodyObjnam, map[string]string{keyHeater: heaterObjnam})
 }
 
 // HeatSourceNone is the HTSRC value meaning "no heater assigned" (heat off).
