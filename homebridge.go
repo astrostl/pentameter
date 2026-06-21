@@ -176,7 +176,7 @@ func runHomebridge(cfg *appConfig) {
 	engine.Resolve = newDiscoveryResolver(cfg)
 
 	log.Printf("[homebridge] starting (poll=%v, configured ip=%q)", cfg.pollInterval, cfg.intelliCenterIP)
-	hbRun(ctx, engine, out, cmds, cfg.metricsPort)
+	hbRun(ctx, engine, out, cmds, cfg.httpPort)
 	log.Printf("[homebridge] shutting down")
 }
 
@@ -425,8 +425,8 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 			pub.resync(engine, out)
 		}
 	}
-	// Optional Prometheus metrics (opt-in via metricsPort): one sidecar serves
-	// both HomeKit and Grafana. nil when disabled.
+	// Prometheus metrics: one sidecar serves both HomeKit and Grafana. Always on
+	// in production (httpPort has a default); tests pass "" to skip binding a port.
 	var metrics *hbMetrics
 	if metricsPort != "" {
 		metrics = startHBMetrics(engine, metricsPort)
