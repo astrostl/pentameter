@@ -1,10 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,16 +13,15 @@ import (
 )
 
 const (
-	testShowOnMenuValue   = "1w"                      // Test value for SHOMNU parameter indicating feature should be shown.
-	testStatusOff         = "OFF"                     // Test circuit/feature off status.
-	testStatusOn          = statusOn                  // Test circuit/feature on status (uses main.go constant).
-	testIntelliCenterURL  = "ws://192.168.1.100:6680" // Test IntelliCenter WebSocket URL.
-	testIntelliCenterIP   = "192.168.1.100"           // Test IntelliCenter IP address.
-	testIntelliCenterPort = "6680"                    // Test IntelliCenter port.
-	testCircGrpParent     = "GRP01"                   // Test circuit group parent ID.
-	testCircGrpCircuit    = "C0004"                   // Test circuit group circuit reference.
-	testCircGrpUseWhite   = "White"                   // Test circuit group color/mode (white).
-	testCircGrpUseBlue    = "Blue"                    // Test circuit group color/mode (blue).
+	testShowOnMenuValue   = "1w"            // Test value for SHOMNU parameter indicating feature should be shown.
+	testStatusOff         = "OFF"           // Test circuit/feature off status.
+	testStatusOn          = statusOn        // Test circuit/feature on status (uses main.go constant).
+	testIntelliCenterIP   = "192.168.1.100" // Test IntelliCenter IP address.
+	testIntelliCenterPort = "6680"          // Test IntelliCenter port.
+	testCircGrpParent     = "GRP01"         // Test circuit group parent ID.
+	testCircGrpCircuit    = "C0004"         // Test circuit group circuit reference.
+	testCircGrpUseWhite   = "White"         // Test circuit group color/mode (white).
+	testCircGrpUseBlue    = "Blue"          // Test circuit group color/mode (blue).
 )
 
 // Test helper to create a mock WebSocket server.
@@ -71,12 +67,20 @@ func createMockWebSocketServer(t *testing.T, responses map[string]IntelliCenterR
 func TestNewPoolMonitor(t *testing.T) {
 	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
 
-	if poolMonitor.intelliCenterURL != testIntelliCenterURL {
-		t.Errorf("Expected URL %s, got %s", testIntelliCenterURL, poolMonitor.intelliCenterURL)
+	if poolMonitor.ic == nil {
+		t.Error("Expected intellicenter client to be initialized")
 	}
 
-	if poolMonitor.connected {
-		t.Error("New monitor should not be connected initially")
+	if poolMonitor.listenMode {
+		t.Error("listenMode should be false")
+	}
+
+	if poolMonitor.bodyHeatingStatus == nil {
+		t.Error("bodyHeatingStatus map should be initialized")
+	}
+
+	if poolMonitor.referencedHeaters == nil {
+		t.Error("referencedHeaters map should be initialized")
 	}
 
 	if poolMonitor.ic.RetryMax != maxRetries {
@@ -86,106 +90,34 @@ func TestNewPoolMonitor(t *testing.T) {
 
 // (backoff-delay math now lives in and is tested by the intellicenter package.)
 
-func TestConnectWithValidServer(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{}
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	// Convert http:// to ws://
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	err := poolMonitor.Connect(ctx)
-	if err != nil {
-		t.Fatalf("Expected successful connection, got error: %v", err)
-	}
-
-	if !poolMonitor.connected {
-		t.Error("Monitor should be connected after successful Connect()")
-	}
-
-	poolMonitor.Close()
-}
-
-func TestConnectWithInvalidServer(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	// Reduce retry config for faster test execution
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	ctx := t.Context()
-
-	err := poolMonitor.Connect(ctx)
-	if err == nil {
-		t.Error("Expected connection error for invalid host")
-	}
-
-	if poolMonitor.connected {
-		t.Error("Monitor should not be connected after failed connection")
-	}
-}
-
-func TestIsHealthyWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-	ctx := t.Context()
-
-	if poolMonitor.IsHealthy(ctx) {
-		t.Error("Monitor should not be healthy without connection")
-	}
-}
-
 func TestGetBodyTemperatures(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=BODY": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "BODY1",
-					Params: map[string]string{
-						"SNAME":  "Pool",
-						"TEMP":   "82.5",
-						"SUBTYP": "POOL",
-						"STATUS": "ON",
-						"HTMODE": "1",
-						"HTSRC":  "GAS",
-					},
-				},
-				{
-					ObjName: "BODY2",
-					Params: map[string]string{
-						"SNAME":  "Spa",
-						"TEMP":   "104.0",
-						"SUBTYP": "SPA",
-						"STATUS": "ON",
-						"HTMODE": "0",
-						"HTSRC":  "GAS",
-					},
-				},
+	objs := []ObjectData{
+		{
+			ObjName: "BODY1",
+			Params: map[string]string{
+				"SNAME":  "Pool",
+				"TEMP":   "82.5",
+				"SUBTYP": "POOL",
+				"STATUS": "ON",
+				"HTMODE": "1",
+				"HTSRC":  "GAS",
+			},
+		},
+		{
+			ObjName: "BODY2",
+			Params: map[string]string{
+				"SNAME":  "Spa",
+				"TEMP":   "104.0",
+				"SUBTYP": "SPA",
+				"STATUS": "ON",
+				"HTMODE": "0",
+				"HTSRC":  "GAS",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getBodyTemperatures()
-	if err != nil {
-		t.Fatalf("getBodyTemperatures failed: %v", err)
-	}
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor.applyBodyTemperatures(objs)
 
 	// Check that heating status was tracked
 	if !poolMonitor.bodyHeatingStatus["pool"] {
@@ -196,143 +128,72 @@ func TestGetBodyTemperatures(t *testing.T) {
 	}
 }
 
-func testAirTemperature(t *testing.T, probeValue string, shouldFail bool, errorMsg string) {
+func testAirTemperature(t *testing.T, probeValue string) {
 	t.Helper()
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "_A135",
-					Params: map[string]string{
-						"SNAME":  "Air Sensor",
-						"PROBE":  probeValue,
-						"SUBTYP": "AIR",
-						"STATUS": "ON",
-					},
-				},
+	objs := []ObjectData{
+		{
+			ObjName: "_A135",
+			Params: map[string]string{
+				"SNAME":  "Air Sensor",
+				"PROBE":  probeValue,
+				"SUBTYP": "AIR",
+				"STATUS": "ON",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getAirTemperature()
-	if shouldFail {
-		if err != nil {
-			t.Errorf(errorMsg, err)
-		}
-	} else {
-		if err != nil {
-			t.Fatalf("getAirTemperature failed: %v", err)
-		}
-	}
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+	// applyAirTemperature never returns an error; it logs and continues on bad parse.
+	poolMonitor.applyAirTemperature(objs)
 }
 
 func TestGetAirTemperature(t *testing.T) {
-	testAirTemperature(t, "75.2", false, "")
+	testAirTemperature(t, "75.2")
 }
 
-func TestGetPumpData(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=PUMP": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "PUMP1",
-					Params: map[string]string{
-						"SNAME":  "Pool Pump",
-						"RPM":    "2400",
-						"STATUS": "ON",
-						"WATTS":  "1200",
-						"GPM":    "55",
-						"SPEED":  "HIGH",
-					},
-				},
+func TestGetPumpData(_ *testing.T) {
+	objs := []ObjectData{
+		{
+			ObjName: "PUMP1",
+			Params: map[string]string{
+				"SNAME":  "Pool Pump",
+				"RPM":    "2400",
+				"STATUS": "ON",
+				"WATTS":  "1200",
+				"GPM":    "55",
+				"SPEED":  "HIGH",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getPumpData()
-	if err != nil {
-		t.Fatalf("getPumpData failed: %v", err)
-	}
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor.applyPumpData(objs, 0)
 }
 
-func TestGetCircuitStatus(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=CIRCUIT": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "C01",
-					Params: map[string]string{
-						"SNAME":  "Pool Light",
-						"STATUS": "ON",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "LIGHT",
-					},
-				},
-				{
-					ObjName: "C02",
-					Params: map[string]string{
-						"SNAME":  "AUX 1",
-						"STATUS": "OFF",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "GENERIC",
-					},
-				},
+func TestGetCircuitStatus(_ *testing.T) {
+	objs := []ObjectData{
+		{
+			ObjName: "C01",
+			Params: map[string]string{
+				"SNAME":  "Pool Light",
+				"STATUS": "ON",
+				"OBJTYP": "CIRCUIT",
+				"SUBTYP": "LIGHT",
+			},
+		},
+		{
+			ObjName: "C02",
+			Params: map[string]string{
+				"SNAME":  "AUX 1",
+				"STATUS": "OFF",
+				"OBJTYP": "CIRCUIT",
+				"SUBTYP": "GENERIC",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.getCircuitStatus()
-	if err != nil {
-		t.Fatalf("getCircuitStatus failed: %v", err)
-	}
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+	poolMonitor.applyCircuitStatus(objs)
 }
 
 func TestIsValidCircuit(t *testing.T) {
@@ -410,121 +271,6 @@ func TestCalculateCircuitStatusValue(t *testing.T) {
 			t.Errorf("calculateCircuitStatusValue(%s, %s, %s, %v): expected %.1f, got %.1f",
 				test.name, test.status, test.objName, test.freezeEnabled, test.expected, result)
 		}
-	}
-}
-
-// createPushNotificationServer creates a server that sends push notifications before the actual response.
-// This tests that pentameter gracefully handles unsolicited push notifications.
-func createPushNotificationServer(t *testing.T, numPushNotifications int) *httptest.Server {
-	t.Helper()
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		var req IntelliCenterRequest
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-
-		// Send push notifications first (simulating equipment state changes)
-		for i := 0; i < numPushNotifications; i++ {
-			pushResp := IntelliCenterResponse{
-				Command:   "NotifyList",
-				MessageID: fmt.Sprintf("push-notification-%d", i),
-				Response:  "200",
-				ObjectList: []ObjectData{
-					{
-						ObjName: "C0001",
-						Params:  map[string]string{"SNAME": "Pool Light", "STATUS": "ON"},
-					},
-				},
-			}
-			if err := conn.WriteJSON(pushResp); err != nil {
-				return
-			}
-		}
-
-		// Then send the actual response with matching messageID
-		resp := IntelliCenterResponse{
-			Command:   req.Command,
-			MessageID: req.MessageID,
-			Response:  "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "B0001",
-					Params: map[string]string{
-						"SNAME":  "Pool",
-						"TEMP":   "82.5",
-						"SUBTYP": "POOL",
-						"STATUS": "ON",
-						"HTMODE": "0",
-					},
-				},
-			},
-		}
-
-		if err := conn.WriteJSON(resp); err != nil {
-			return
-		}
-	}))
-}
-
-func TestPushNotificationHandling(t *testing.T) {
-	// Test that push notifications are gracefully skipped
-	server := createPushNotificationServer(t, 3) // Send 3 push notifications before response
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// This should succeed despite receiving push notifications first
-	err := poolMonitor.getBodyTemperatures()
-	if err != nil {
-		t.Errorf("Expected success after skipping push notifications, got: %v", err)
-	}
-
-	// Connection should remain healthy
-	if !poolMonitor.connected {
-		t.Error("Connection should remain healthy after handling push notifications")
-	}
-}
-
-func TestPushNotificationLogging(t *testing.T) {
-	// Test that push notifications are logged in debug mode
-	server := createPushNotificationServer(t, 2)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	// Enable debug mode to see push notification logs
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// Should succeed and log push notifications
-	err := poolMonitor.getBodyTemperatures()
-	if err != nil {
-		t.Errorf("Expected success, got: %v", err)
 	}
 }
 
@@ -705,256 +451,11 @@ func TestHealthCheckEndpoint(t *testing.T) {
 	}
 }
 
-func TestGetAllEquipmentStatus(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=BODY": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "BODY1",
-					Params: map[string]string{
-						"SNAME":  "Pool",
-						"TEMP":   "82.5",
-						"SUBTYP": "POOL",
-						"STATUS": "ON",
-						"HTMODE": "1",
-					},
-				},
-			},
-		},
-		"GetParamList:": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "_A135",
-					Params: map[string]string{
-						"SNAME":  "Air Sensor",
-						"PROBE":  "75.2",
-						"SUBTYP": "AIR",
-						"STATUS": "ON",
-					},
-				},
-			},
-		},
-		"GetParamList:OBJTYP=PUMP": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "PUMP1",
-					Params: map[string]string{
-						"SNAME":  "Pool Pump",
-						"RPM":    "2400",
-						"STATUS": "ON",
-					},
-				},
-			},
-		},
-		"GetParamList:OBJTYP=CIRCUIT": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "C01",
-					Params: map[string]string{
-						"SNAME":  "Pool Light",
-						"STATUS": "ON",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "LIGHT",
-					},
-				},
-			},
-		},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.GetAllEquipmentStatus(ctx)
-	if err != nil {
-		t.Fatalf("GetAllEquipmentStatus failed: %v", err)
-	}
-}
-
-func TestGetAllEquipmentStatusWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-	ctx := t.Context()
-
-	err := poolMonitor.GetAllEquipmentStatus(ctx)
-	if err == nil {
-		t.Error("Expected error when calling GetAllEquipmentStatus without connection")
-	}
-
-	if !strings.Contains(err.Error(), "not connected") {
-		t.Errorf("Expected 'not connected' error, got: %v", err)
-	}
-}
-
-func TestEnsureConnected(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{}
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	// Test with no connection
-	if err := poolMonitor.EnsureConnected(ctx); err != nil {
-		t.Fatalf("EnsureConnected should establish connection: %v", err)
-	}
-
-	if !poolMonitor.connected {
-		t.Error("Should be connected after EnsureConnected")
-	}
-
-	// Test with existing healthy connection
-	if err := poolMonitor.EnsureConnected(ctx); err != nil {
-		t.Fatalf("EnsureConnected should work with existing connection: %v", err)
-	}
-
-	poolMonitor.Close()
-}
-
-func TestEnsureConnectedWithUnhealthyConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	// Reduce retry config for faster test execution
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	ctx := t.Context()
-
-	// Force connected state but no actual connection
-	poolMonitor.connected = true
-
-	err := poolMonitor.EnsureConnected(ctx)
-	if err == nil {
-		t.Error("Expected error when reconnecting to invalid host")
-	}
-
-	if poolMonitor.connected {
-		t.Error("Should not be connected after failed reconnection")
-	}
-}
-
-func TestIsHealthyWithConnection(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{}
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// Test healthy connection
-	if !poolMonitor.IsHealthy(ctx) {
-		t.Error("Connection should be healthy after successful connect")
-	}
-
-	// Test health check caching (should not perform ping if within interval)
-	poolMonitor.lastHealthCheck = time.Now()
-	if !poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should be cached")
-	}
-}
-
-func TestIsHealthyWithFailedPing(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-	ctx := t.Context()
-
-	// Test without any connection
-	poolMonitor.connected = false
-
-	if poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should fail without connection")
-	}
-
-	// Test with connection marked true but no actual conn object
-	poolMonitor.connected = true
-
-	if poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should fail when conn is nil")
-	}
-}
-
-func TestStartTemperaturePollingShutdown(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=BODY":    {Command: "GetParamList", Response: "200"},
-		"GetParamList:":               {Command: "GetParamList", Response: "200"},
-		"GetParamList:OBJTYP=PUMP":    {Command: "GetParamList", Response: "200"},
-		"GetParamList:OBJTYP=CIRCUIT": {Command: "GetParamList", Response: "200"},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-
-	// Create context that will be canceled
-	ctx, cancel := context.WithCancel(t.Context())
-
-	// Start polling in goroutine
-	done := make(chan bool)
-	go func() {
-		poolMonitor.StartTemperaturePolling(ctx, 100*time.Millisecond)
-		done <- true
-	}()
-
-	// Let it run briefly
-	time.Sleep(50 * time.Millisecond)
-
-	// Cancel and wait for shutdown
-	cancel()
-
-	select {
-	case <-done:
-		// Success - polling stopped
-	case <-time.After(time.Second):
-		t.Error("Temperature polling did not stop within timeout")
-	}
-
-	poolMonitor.Close()
-}
-
 func TestLogPumpUpdate(_ *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 
 	// Test pump update logging
 	poolMonitor.logPumpUpdate("Test Pump", "PUMP1", 2400, "ON", time.Millisecond)
-}
-
-func TestCloseWithoutConnection(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	poolMonitor.Close()
-
-	if poolMonitor.connected {
-		t.Error("Should not be marked as connected after close")
-	}
 }
 
 func TestGetEnvOrDefaultWithExistingVar(t *testing.T) {
@@ -983,68 +484,6 @@ func TestStartServer(t *testing.T) {
 	_ = serverFunc // Acknowledge we're testing existence, not calling
 }
 
-func TestRequestPumpDataAPIError(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=PUMP": {
-			Command:  "GetParamList",
-			Response: "500", // API error
-		},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	_, _, err := poolMonitor.requestPumpData()
-	if err == nil {
-		t.Error("Expected error for API response 500")
-	}
-	if !strings.Contains(err.Error(), "500") {
-		t.Errorf("Expected error to mention response code 500, got: %v", err)
-	}
-}
-
-func TestRequestCircuitDataAPIError(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=CIRCUIT": {
-			Command:  "GetParamList",
-			Response: "404", // API error
-		},
-	}
-
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	_, err := poolMonitor.requestCircuitData()
-	if err == nil {
-		t.Error("Expected error for API response 404")
-	}
-	if !strings.Contains(err.Error(), "404") {
-		t.Errorf("Expected error to mention response code 404, got: %v", err)
-	}
-}
-
 func testAPIError(t *testing.T, condition, responseCode string, testFunc func(*PoolMonitor) error) {
 	t.Helper()
 	responses := map[string]IntelliCenterResponse{
@@ -1063,10 +502,10 @@ func testAPIError(t *testing.T, condition, responseCode string, testFunc func(*P
 	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
 	ctx := t.Context()
 
-	if err := poolMonitor.Connect(ctx); err != nil {
+	if err := poolMonitor.ic.ConnectWithRetry(ctx); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer poolMonitor.Close()
+	defer poolMonitor.ic.Close()
 
 	err := testFunc(poolMonitor)
 	if err == nil {
@@ -1074,245 +513,27 @@ func testAPIError(t *testing.T, condition, responseCode string, testFunc func(*P
 	}
 }
 
-func TestGetBodyTemperaturesAPIError(t *testing.T) {
-	testAPIError(t, "GetParamList:OBJTYP=BODY", "500", func(pm *PoolMonitor) error {
-		return pm.getBodyTemperatures()
-	})
-}
-
-func TestGetAirTemperatureAPIError(t *testing.T) {
-	testAPIError(t, "GetParamList:", "403", func(pm *PoolMonitor) error {
-		return pm.getAirTemperature()
-	})
-}
-
-func TestStartTemperaturePollingWithConnectionFailures(t *testing.T) {
-	// Test polling with continuous connection failures
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	// Reduce retry config for faster test execution
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	poolMonitor.disableAutoRediscovery = true // Disable re-discovery for test
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-
-	// Start polling with very short interval
-	done := make(chan bool, 1)
-	go func() {
-		poolMonitor.StartTemperaturePolling(ctx, 50*time.Millisecond)
-		done <- true
-	}()
-
-	// Wait for context timeout
-	select {
-	case <-done:
-		// Success - polling stopped due to context cancellation
-	case <-time.After(500 * time.Millisecond):
-		t.Error("Temperature polling did not stop within timeout")
-	}
-}
-
-func TestStartTemperaturePollingWithGetAllEquipmentStatusFailure(t *testing.T) {
-	// Create server that closes connection immediately after upgrade
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		// Close immediately to cause read failures
-		conn.Close()
-	}))
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	poolMonitor.disableAutoRediscovery = true // Disable re-discovery for test
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-
-	done := make(chan bool, 1)
-	go func() {
-		poolMonitor.StartTemperaturePolling(ctx, 50*time.Millisecond)
-		done <- true
-	}()
-
-	select {
-	case <-done:
-		// Success - polling stopped
-	case <-time.After(500 * time.Millisecond):
-		t.Error("Temperature polling did not stop within timeout")
-	}
-}
-
-func TestGetAllEquipmentStatusPartialFailures(t *testing.T) {
-	// Create server that responds to some requests but not others
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		for {
-			var req IntelliCenterRequest
-			if err := conn.ReadJSON(&req); err != nil {
-				return
-			}
-
-			requestCount++
-			// Fail the second request (air temperature)
-			if requestCount == 2 {
-				conn.Close()
-				return
-			}
-
-			resp := IntelliCenterResponse{
-				Command:   req.Command,
-				MessageID: req.MessageID,
-				Response:  "200",
-				ObjectList: []ObjectData{
-					{
-						ObjName: "BODY1",
-						Params: map[string]string{
-							"SNAME":  "Pool",
-							"TEMP":   "82.5",
-							"SUBTYP": "POOL",
-							"STATUS": "ON",
-							"HTMODE": "1",
-						},
-					},
-				},
-			}
-
-			if err := conn.WriteJSON(resp); err != nil {
-				return
-			}
-		}
-	}))
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.GetAllEquipmentStatus(ctx)
-	if err == nil {
-		t.Error("Expected error due to connection failure during GetAllEquipmentStatus")
-	}
-}
-
-func TestIsHealthyPingFailure(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-	ctx := t.Context()
-
-	// Test case 1: nil connection should return false immediately
-	poolMonitor.connected = true
-	poolMonitor.lastHealthCheck = time.Time{} // Force health check
-
-	// This should fail because conn is nil (early return)
-	if poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should fail when connection is nil")
-	}
-
-	// Note: poolMonitor.connected remains true because the early return in IsHealthy doesn't change it
-	// This is the actual behavior of the implementation
-
-	// Test case 2: Test with disconnected state
-	poolMonitor.connected = false
-
-	if poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should fail when disconnected")
-	}
-}
-
-func TestGetBodyTemperaturesWithInvalidTemperature(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=BODY": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "BODY1",
-					Params: map[string]string{
-						"SNAME":  "Pool",
-						"TEMP":   "invalid_temp",
-						"SUBTYP": "POOL",
-						"STATUS": "ON",
-						"HTMODE": "1",
-					},
-				},
+func TestGetBodyTemperaturesWithInvalidTemperature(_ *testing.T) {
+	objs := []ObjectData{
+		{
+			ObjName: "BODY1",
+			Params: map[string]string{
+				"SNAME":  "Pool",
+				"TEMP":   "invalid_temp",
+				"SUBTYP": "POOL",
+				"STATUS": "ON",
+				"HTMODE": "1",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// This should not fail even with invalid temperature - it logs and continues
-	err := poolMonitor.getBodyTemperatures()
-	if err != nil {
-		t.Errorf("getBodyTemperatures should handle invalid temperature gracefully: %v", err)
-	}
+	poolMonitor := NewPoolMonitor("test", "6680", false)
+	// This should not panic even with invalid temperature - it logs and continues.
+	poolMonitor.applyBodyTemperatures(objs)
 }
 
 func TestGetAirTemperatureWithInvalidTemperature(t *testing.T) {
-	testAirTemperature(t, "not_a_number", true, "getAirTemperature should handle invalid temperature gracefully: %v")
-}
-
-func TestConnectWithRetryContextCancellation(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	// Reduce retry config for faster test execution
-	poolMonitor.ic.RetryMax = 3
-	poolMonitor.ic.RetryBaseDelay = 50 * time.Millisecond
-
-	// Create context that gets canceled during retry
-	ctx, cancel := context.WithCancel(t.Context())
-
-	// Cancel context after a delay that will occur during retry attempts
-	go func() {
-		time.Sleep(120 * time.Millisecond)
-		cancel()
-	}()
-
-	err := poolMonitor.Connect(ctx)
-	if err == nil {
-		t.Error("Expected error due to context cancellation")
-	}
-
-	// The error could be either context.Canceled or a connection error
-	// depending on timing, both are acceptable for this test
-	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "connect failed") {
-		t.Errorf("Expected context.Canceled or connection error, got: %v", err)
-	}
+	testAirTemperature(t, "not_a_number")
 }
 
 func TestProcessCircuitObjectWithMissingFields(_ *testing.T) {
@@ -1347,31 +568,6 @@ func TestProcessCircuitObjectWithMissingFields(_ *testing.T) {
 	poolMonitor.processCircuitObject(obj2)
 }
 
-func TestIsHealthyWithPingSuccess(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{}
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// Force health check by setting last check to zero
-	poolMonitor.lastHealthCheck = time.Time{}
-
-	// This should perform a ping and succeed
-	if !poolMonitor.IsHealthy(ctx) {
-		t.Error("Health check should succeed with valid connection")
-	}
-}
-
 func TestMainCommandLineParsing(t *testing.T) {
 	// Test that main would fail without required IP
 	// We can't call main directly since it uses flag.Parse() and os.Exit()
@@ -1380,231 +576,6 @@ func TestMainCommandLineParsing(t *testing.T) {
 	result := getEnvOrDefault("NONEXISTENT_PENTAMETER_VAR", "test-default")
 	if result != "test-default" {
 		t.Errorf("Expected test-default, got %s", result)
-	}
-}
-
-func createImmediateCloseServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		// Close immediately to cause write/read error
-		conn.Close()
-	}))
-}
-
-func setupPoolMonitorWithServer(t *testing.T, server *httptest.Server) *PoolMonitor {
-	t.Helper()
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-
-	return poolMonitor
-}
-
-func TestRequestPumpDataWriteError(t *testing.T) {
-	server := createImmediateCloseServer(t)
-	defer server.Close()
-
-	poolMonitor := setupPoolMonitorWithServer(t, server)
-	defer poolMonitor.Close()
-
-	// This should fail due to closed connection
-	_, _, err := poolMonitor.requestPumpData()
-	if err == nil {
-		t.Error("Expected error due to write failure")
-	}
-}
-
-func TestRequestCircuitDataWriteError(t *testing.T) {
-	server := createImmediateCloseServer(t)
-	defer server.Close()
-
-	poolMonitor := setupPoolMonitorWithServer(t, server)
-	defer poolMonitor.Close()
-
-	// This should fail due to closed connection
-	_, err := poolMonitor.requestCircuitData()
-	if err == nil {
-		t.Error("Expected error due to write failure")
-	}
-}
-
-// createPushThenPumpDataServer creates a server that sends push notifications before pump data response.
-func createPushThenPumpDataServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		var req IntelliCenterRequest
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-
-		// Send a push notification first
-		pushResp := IntelliCenterResponse{
-			Command:    "NotifyList",
-			MessageID:  "push-notification-pump",
-			Response:   "200",
-			ObjectList: []ObjectData{},
-		}
-		if err := conn.WriteJSON(pushResp); err != nil {
-			return
-		}
-
-		// Then send actual pump data response
-		resp := IntelliCenterResponse{
-			Command:   req.Command,
-			MessageID: req.MessageID,
-			Response:  "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "P0001",
-					Params: map[string]string{
-						"SNAME":  "Pool Pump",
-						"RPM":    "2400",
-						"STATUS": "ON",
-					},
-				},
-			},
-		}
-		if err := conn.WriteJSON(resp); err != nil {
-			return
-		}
-	}))
-}
-
-func TestRequestPumpDataWithPushNotification(t *testing.T) {
-	server := createPushThenPumpDataServer(t)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	resp, _, err := poolMonitor.requestPumpData()
-	if err != nil {
-		t.Errorf("Expected success after handling push notification, got: %v", err)
-	}
-
-	if resp == nil || len(resp.ObjectList) == 0 {
-		t.Error("Expected pump data in response")
-	}
-
-	// Connection should remain healthy
-	if !poolMonitor.connected {
-		t.Error("Connection should remain healthy after handling push notifications")
-	}
-}
-
-// createPushThenCircuitDataServer creates a server that sends push notifications before circuit data response.
-func createPushThenCircuitDataServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		var req IntelliCenterRequest
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-
-		// Send push notifications first
-		for i := 0; i < 2; i++ {
-			pushResp := IntelliCenterResponse{
-				Command:    "NotifyList",
-				MessageID:  fmt.Sprintf("push-notification-circuit-%d", i),
-				Response:   "200",
-				ObjectList: []ObjectData{},
-			}
-			if err := conn.WriteJSON(pushResp); err != nil {
-				return
-			}
-		}
-
-		// Then send actual circuit data response
-		resp := IntelliCenterResponse{
-			Command:   req.Command,
-			MessageID: req.MessageID,
-			Response:  "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "C0001",
-					Params: map[string]string{
-						"SNAME":  "Pool Light",
-						"STATUS": "ON",
-						"SUBTYP": "LIGHT",
-					},
-				},
-			},
-		}
-		if err := conn.WriteJSON(resp); err != nil {
-			return
-		}
-	}))
-}
-
-func TestRequestCircuitDataWithPushNotifications(t *testing.T) {
-	server := createPushThenCircuitDataServer(t)
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	resp, err := poolMonitor.requestCircuitData()
-	if err != nil {
-		t.Errorf("Expected success after handling push notifications, got: %v", err)
-	}
-
-	if resp == nil || len(resp.ObjectList) == 0 {
-		t.Error("Expected circuit data in response")
-	}
-
-	// Connection should remain healthy
-	if !poolMonitor.connected {
-		t.Error("Connection should remain healthy after handling push notifications")
 	}
 }
 
@@ -1803,49 +774,31 @@ func TestGetStatusDescription(t *testing.T) {
 	}
 }
 
-func TestGetThermalStatus(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=HEATER": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "HTR01",
-					Params: map[string]string{
-						"SNAME":  "Pool Heater",
-						"STATUS": "ON",
-						"SUBTYP": "THERMAL",
-						"OBJTYP": "HEATER",
-					},
-				},
-				{
-					ObjName: "HTR02",
-					Params: map[string]string{
-						"SNAME":  "Spa Heater",
-						"STATUS": "OFF",
-						"SUBTYP": "THERMAL",
-						"OBJTYP": "HEATER",
-					},
-				},
+func TestGetThermalStatus(_ *testing.T) {
+	objs := []ObjectData{
+		{
+			ObjName: "HTR01",
+			Params: map[string]string{
+				"SNAME":  "Pool Heater",
+				"STATUS": "ON",
+				"SUBTYP": "THERMAL",
+				"OBJTYP": "HEATER",
+			},
+		},
+		{
+			ObjName: "HTR02",
+			Params: map[string]string{
+				"SNAME":  "Spa Heater",
+				"STATUS": "OFF",
+				"SUBTYP": "THERMAL",
+				"OBJTYP": "HEATER",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
+	poolMonitor := NewPoolMonitor("test", "6680", true) // Enable debug mode
 
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true) // Enable debug mode
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// Set up some referenced heaters
+	// Set up some referenced heaters.
 	poolMonitor.referencedHeaters["HTR01"] = BodyHeaterInfo{
 		BodyName:  "Pool",
 		BodyObj:   "BODY1",
@@ -1856,165 +809,11 @@ func TestGetThermalStatus(t *testing.T) {
 		HiTemp:    85.0,
 	}
 
-	// Set up body heating status
+	// Set up body heating status.
 	poolMonitor.bodyHeatingStatus["pool"] = true
 	poolMonitor.bodyHeatingStatus["spa"] = false
 
-	err := poolMonitor.getThermalStatus()
-	if err != nil {
-		t.Fatalf("getThermalStatus failed: %v", err)
-	}
-}
-
-func TestGetThermalStatusAPIError(t *testing.T) {
-	testAPIError(t, "GetParamList:OBJTYP=HEATER", "500", func(pm *PoolMonitor) error {
-		return pm.getThermalStatus()
-	})
-}
-
-func TestLoadFeatureConfiguration(t *testing.T) {
-	// Create a server that returns feature configuration
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		var req map[string]interface{}
-		if err := conn.ReadJSON(&req); err != nil {
-			return
-		}
-
-		// Return mock configuration
-		resp := map[string]interface{}{
-			"command":   "GetQuery",
-			"messageID": req["messageID"],
-			"response":  "200",
-			"answer": []interface{}{
-				map[string]interface{}{
-					"objnam": "FTR01",
-					"params": map[string]interface{}{
-						"SHOMNU": testShowOnMenuValue,
-					},
-				},
-				map[string]interface{}{
-					"objnam": "FTR02",
-					"params": map[string]interface{}{
-						"SHOMNU": "0",
-					},
-				},
-				map[string]interface{}{
-					"objnam": "PUMP01", // Non-FTR object should be ignored
-					"params": map[string]interface{}{
-						"SHOMNU": testShowOnMenuValue,
-					},
-				},
-			},
-		}
-
-		if err := conn.WriteJSON(resp); err != nil {
-			return
-		}
-	}))
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	err := poolMonitor.LoadFeatureConfiguration(ctx)
-	if err != nil {
-		t.Fatalf("LoadFeatureConfiguration failed: %v", err)
-	}
-
-	// Check that feature configuration was loaded
-	if poolMonitor.featureConfig["FTR01"] != testShowOnMenuValue {
-		t.Errorf("Expected FTR01 to have SHOMNU=%s, got %s", testShowOnMenuValue, poolMonitor.featureConfig["FTR01"])
-	}
-
-	if poolMonitor.featureConfig["FTR02"] != "0" {
-		t.Errorf("Expected FTR02 to have SHOMNU=0, got %s", poolMonitor.featureConfig["FTR02"])
-	}
-}
-
-func TestLoadFeatureConfigurationError(t *testing.T) {
-	server := createImmediateCloseServer(t)
-	defer server.Close()
-
-	poolMonitor := setupPoolMonitorWithServer(t, server)
-	defer poolMonitor.Close()
-
-	ctx := t.Context()
-	err := poolMonitor.LoadFeatureConfiguration(ctx)
-	if err == nil {
-		t.Error("Expected error due to connection failure")
-	}
-}
-
-func TestProcessConfigurationItem(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	// Test valid configuration item
-	item := map[string]interface{}{
-		"objnam": "FTR01",
-		"params": map[string]interface{}{
-			"SHOMNU": testShowOnMenuValue,
-		},
-	}
-
-	poolMonitor.processConfigurationItem(item)
-
-	if poolMonitor.featureConfig["FTR01"] != testShowOnMenuValue {
-		t.Errorf("Expected FTR01 to have SHOMNU=%s, got %s", testShowOnMenuValue, poolMonitor.featureConfig["FTR01"])
-	}
-
-	// Test invalid items that should be handled gracefully
-	invalidItems := []interface{}{
-		"not-a-map",
-		map[string]interface{}{
-			// Missing objnam
-			"params": map[string]interface{}{
-				"SHOMNU": testShowOnMenuValue,
-			},
-		},
-		map[string]interface{}{
-			"objnam": "PUMP01", // Not FTR prefix
-			"params": map[string]interface{}{
-				"SHOMNU": testShowOnMenuValue,
-			},
-		},
-		map[string]interface{}{
-			"objnam": "FTR02",
-			// Missing params
-		},
-		map[string]interface{}{
-			"objnam": "FTR03",
-			"params": "not-a-map",
-		},
-		map[string]interface{}{
-			"objnam": "FTR04",
-			"params": map[string]interface{}{
-				// Missing SHOMNU
-			},
-		},
-	}
-
-	// These should all handle gracefully without error
-	for _, item := range invalidItems {
-		poolMonitor.processConfigurationItem(item)
-	}
+	poolMonitor.applyThermalStatus(objs)
 }
 
 func TestProcessBodyHeatingStatusError(t *testing.T) {
@@ -2454,10 +1253,12 @@ func TestGetCircuitGroups(t *testing.T) {
 	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
 	ctx := t.Context()
 
-	if err := poolMonitor.Connect(ctx); err != nil {
+	if err := poolMonitor.ic.ConnectWithRetry(ctx); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer poolMonitor.Close()
+	defer poolMonitor.ic.Close()
+
+	poolMonitor.initializeState()
 
 	err := poolMonitor.getCircuitGroups()
 	if err != nil {
@@ -2497,10 +1298,10 @@ func TestGetCircuitGroupsAPIError(t *testing.T) {
 	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
 	ctx := t.Context()
 
-	if err := poolMonitor.Connect(ctx); err != nil {
+	if err := poolMonitor.ic.ConnectWithRetry(ctx); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer poolMonitor.Close()
+	defer poolMonitor.ic.Close()
 
 	err := poolMonitor.getCircuitGroups()
 	if err == nil {
@@ -2545,10 +1346,10 @@ func TestGetAllObjects(t *testing.T) {
 	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
 	ctx := t.Context()
 
-	if err := poolMonitor.Connect(ctx); err != nil {
+	if err := poolMonitor.ic.ConnectWithRetry(ctx); err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer poolMonitor.Close()
+	defer poolMonitor.ic.Close()
 
 	// Initialize state for tracking
 	poolMonitor.initializeState()
@@ -2682,131 +1483,91 @@ func TestLogUnknownEquipmentChanged(_ *testing.T) {
 }
 
 func TestListenModeIntegration(t *testing.T) {
-	responses := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=BODY": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "BODY1",
-					Params: map[string]string{
-						"SNAME":  "Pool",
-						"TEMP":   "82.5",
-						"SUBTYP": "POOL",
-						"STATUS": "ON",
-						"HTMODE": "1",
-					},
+	poolMonitor := NewPoolMonitor("test", "6680", true)
+	poolMonitor.initializeState()
+
+	applyAll := func() {
+		poolMonitor.applyBodyTemperatures([]ObjectData{
+			{
+				ObjName: "BODY1",
+				Params: map[string]string{
+					"SNAME":  "Pool",
+					"TEMP":   "82.5",
+					"SUBTYP": "POOL",
+					"STATUS": "ON",
+					"HTMODE": "1",
 				},
 			},
-		},
-		"GetParamList:": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "_A135",
-					Params: map[string]string{
-						"SNAME":  "Air Sensor",
-						"PROBE":  "75.2",
-						"SUBTYP": "AIR",
-						"STATUS": "ON",
-					},
-				},
-				{
-					ObjName: "VALVE1",
-					Params: map[string]string{
-						"SNAME":  "Pool Valve",
-						"STATUS": "OPEN",
-						"OBJTYP": "VALVE",
-						"SUBTYP": "ACTUATOR",
-					},
+		})
+		poolMonitor.applyAirTemperature([]ObjectData{
+			{
+				ObjName: "_A135",
+				Params: map[string]string{
+					"SNAME":  "Air Sensor",
+					"PROBE":  "75.2",
+					"SUBTYP": "AIR",
+					"STATUS": "ON",
 				},
 			},
-		},
-		"GetParamList:OBJTYP=PUMP": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "PUMP1",
-					Params: map[string]string{
-						"SNAME":  "Pool Pump",
-						"RPM":    "2400",
-						"STATUS": "ON",
-					},
+			{
+				ObjName: "VALVE1",
+				Params: map[string]string{
+					"SNAME":  "Pool Valve",
+					"STATUS": "OPEN",
+					"OBJTYP": "VALVE",
+					"SUBTYP": "ACTUATOR",
 				},
 			},
-		},
-		"GetParamList:OBJTYP=CIRCUIT": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "C01",
-					Params: map[string]string{
-						"SNAME":  "Pool Light",
-						"STATUS": "ON",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "LIGHT",
-					},
+		})
+		poolMonitor.applyPumpData([]ObjectData{
+			{
+				ObjName: "PUMP1",
+				Params: map[string]string{
+					"SNAME":  "Pool Pump",
+					"RPM":    "2400",
+					"STATUS": "ON",
 				},
 			},
-		},
-		"GetParamList:OBJTYP=HEATER": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "HTR01",
-					Params: map[string]string{
-						"SNAME":  "Pool Heater",
-						"STATUS": "ON",
-						"SUBTYP": "THERMAL",
-					},
+		}, 0)
+		poolMonitor.applyCircuitStatus([]ObjectData{
+			{
+				ObjName: "C01",
+				Params: map[string]string{
+					"SNAME":  "Pool Light",
+					"STATUS": "ON",
+					"OBJTYP": "CIRCUIT",
+					"SUBTYP": "LIGHT",
 				},
 			},
-		},
-		"GetParamList:OBJTYP=CIRCGRP": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "c0101",
-					Params: map[string]string{
-						"OBJTYP":  objTypeCircGrp,
-						"PARENT":  testCircGrpParent,
-						"CIRCUIT": testCircGrpCircuit,
-						"ACT":     testStatusOn,
-						"USE":     testCircGrpUseWhite,
-					},
+		})
+		poolMonitor.applyThermalStatus([]ObjectData{
+			{
+				ObjName: "HTR01",
+				Params: map[string]string{
+					"SNAME":  "Pool Heater",
+					"STATUS": "ON",
+					"SUBTYP": "THERMAL",
 				},
 			},
-		},
+		})
+		poolMonitor.trackCircGrp(ObjectData{
+			ObjName: "c0101",
+			Params: map[string]string{
+				"OBJTYP":  objTypeCircGrp,
+				"PARENT":  testCircGrpParent,
+				"CIRCUIT": testCircGrpCircuit,
+				"ACT":     testStatusOn,
+				"USE":     testCircGrpUseWhite,
+			},
+		})
 	}
 
-	server := createMockWebSocketServer(t, responses)
-	defer server.Close()
+	// First pass - should detect all equipment.
+	applyAll()
 
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], true)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// First call - should detect all equipment
-	err := poolMonitor.GetAllEquipmentStatus(ctx)
-	if err != nil {
-		t.Fatalf("First GetAllEquipmentStatus failed: %v", err)
-	}
-
-	// Verify state was tracked
+	// Verify state was tracked.
 	if poolMonitor.previousState == nil {
-		t.Error("previousState should be initialized")
+		t.Fatal("previousState should be initialized")
 	}
 
 	if poolMonitor.previousState.WaterTemps["Pool"] != 82.5 {
@@ -2825,211 +1586,14 @@ func TestListenModeIntegration(t *testing.T) {
 		t.Error("Pool Light should be tracked")
 	}
 
-	// Verify circuit group was tracked
+	// Verify circuit group was tracked.
 	circGrpState := poolMonitor.previousState.CircGrps["c0101"]
 	if circGrpState.Active != testStatusOn || circGrpState.Use != testCircGrpUseWhite {
 		t.Errorf("CircGrp c0101 should be tracked: %+v", circGrpState)
 	}
 
-	// Second call - should not log anything (no changes)
-	err = poolMonitor.GetAllEquipmentStatus(ctx)
-	if err != nil {
-		t.Fatalf("Second GetAllEquipmentStatus failed: %v", err)
-	}
-}
-
-// Re-discovery tests
-//
-// Testing Strategy:
-// - We test all the logic surrounding re-discovery (failure counting, threshold detection,
-//   IP updating, mode switching) extensively
-// - We do NOT test attemptRediscovery() directly because it requires real mDNS discovery
-//   and an actual IntelliCenter on the network, which would make tests non-deterministic
-// - This is a pragmatic approach: test the logic we control, not external network dependencies
-
-func TestUpdateIntelliCenterIP(t *testing.T) {
-	poolMonitor := NewPoolMonitor(testIntelliCenterIP, testIntelliCenterPort, false)
-
-	// Verify initial state
-	if poolMonitor.intelliCenterIP != testIntelliCenterIP {
-		t.Errorf("Expected initial IP %s, got %s", testIntelliCenterIP, poolMonitor.intelliCenterIP)
-	}
-	if poolMonitor.intelliCenterURL != testIntelliCenterURL {
-		t.Errorf("Expected initial URL %s, got %s", testIntelliCenterURL, poolMonitor.intelliCenterURL)
-	}
-
-	// Update IP
-	poolMonitor.updateIntelliCenterIP("192.168.1.200")
-
-	// Verify updated state
-	if poolMonitor.intelliCenterIP != "192.168.1.200" {
-		t.Errorf("Expected updated IP 192.168.1.200, got %s", poolMonitor.intelliCenterIP)
-	}
-	if poolMonitor.intelliCenterURL != "ws://192.168.1.200:6680" {
-		t.Errorf("Expected updated URL ws://192.168.1.200:6680, got %s", poolMonitor.intelliCenterURL)
-	}
-	if poolMonitor.connected {
-		t.Error("Expected connected to be false after IP update")
-	}
-}
-
-func TestHandlePollingSuccess(t *testing.T) {
-	poolMonitor := NewPoolMonitor("192.168.1.100", "6680", false)
-
-	// Set up failure state
-	poolMonitor.consecutiveFailures = 5
-	poolMonitor.inRediscoveryMode = true
-
-	// Call handlePollingSuccess
-	poolMonitor.handlePollingSuccess()
-
-	// Verify success resets failure tracking
-	if poolMonitor.consecutiveFailures != 0 {
-		t.Errorf("Expected consecutiveFailures to be 0, got %d", poolMonitor.consecutiveFailures)
-	}
-	if poolMonitor.inRediscoveryMode {
-		t.Error("Expected inRediscoveryMode to be false after success")
-	}
-}
-
-func TestConsecutiveFailureTracking(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	poolMonitor.disableAutoRediscovery = true
-
-	// Verify initial state
-	if poolMonitor.consecutiveFailures != 0 {
-		t.Errorf("Expected initial consecutiveFailures to be 0, got %d", poolMonitor.consecutiveFailures)
-	}
-
-	// Trigger first failure
-	err := fmt.Errorf("connection failed")
-	poolMonitor.handlePollingError(err)
-
-	if poolMonitor.consecutiveFailures != 1 {
-		t.Errorf("Expected consecutiveFailures to be 1 after first failure, got %d", poolMonitor.consecutiveFailures)
-	}
-
-	// Trigger second failure
-	poolMonitor.handlePollingError(err)
-
-	if poolMonitor.consecutiveFailures != 2 {
-		t.Errorf("Expected consecutiveFailures to be 2 after second failure, got %d", poolMonitor.consecutiveFailures)
-	}
-
-	// Trigger success - should reset counter
-	poolMonitor.handlePollingSuccess()
-
-	if poolMonitor.consecutiveFailures != 0 {
-		t.Errorf("Expected consecutiveFailures to be 0 after success, got %d", poolMonitor.consecutiveFailures)
-	}
-}
-
-func TestFailureThresholdTriggersRediscoveryMode(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	poolMonitor.failureThreshold = 3
-
-	// Test that we don't enter re-discovery mode before threshold
-	poolMonitor.consecutiveFailures = 2
-
-	// Check the logic without calling handlePollingTick (which would trigger actual discovery)
-	shouldEnterRediscovery := !poolMonitor.disableAutoRediscovery &&
-		!poolMonitor.inRediscoveryMode &&
-		poolMonitor.consecutiveFailures >= poolMonitor.failureThreshold
-
-	if shouldEnterRediscovery {
-		t.Error("Should not enter re-discovery mode before threshold (consecutiveFailures=2, threshold=3)")
-	}
-
-	// Test that we would enter re-discovery mode at threshold
-	poolMonitor.consecutiveFailures = 3
-
-	shouldEnterRediscovery = !poolMonitor.disableAutoRediscovery &&
-		!poolMonitor.inRediscoveryMode &&
-		poolMonitor.consecutiveFailures >= poolMonitor.failureThreshold
-
-	if !shouldEnterRediscovery {
-		t.Error("Should enter re-discovery mode at threshold (consecutiveFailures=3, threshold=3)")
-	}
-
-	// Verify the flag is actually set when we manually simulate the logic
-	poolMonitor.inRediscoveryMode = true
-	if !poolMonitor.inRediscoveryMode {
-		t.Error("Failed to set re-discovery mode")
-	}
-}
-
-func TestRediscoveryModeDisabledByFlag(t *testing.T) {
-	poolMonitor := NewPoolMonitor("invalid.host", "6680", false)
-	poolMonitor.ic.RetryMax = 1
-	poolMonitor.ic.RetryBaseDelay = 10 * time.Millisecond
-	poolMonitor.disableAutoRediscovery = true
-	poolMonitor.failureThreshold = 3
-
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-
-	// Simulate exceeding threshold
-	poolMonitor.consecutiveFailures = 5
-	poolMonitor.handlePollingTick(ctx)
-
-	// Should not enter re-discovery mode when disabled
-	if poolMonitor.inRediscoveryMode {
-		t.Error("Should not enter re-discovery mode when disableAutoRediscovery is true")
-	}
-}
-
-func TestHandlePollingTickWithRediscoverySuccess(t *testing.T) {
-	// Create a test server
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(_ *http.Request) bool { return true },
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
-		}
-		defer conn.Close()
-
-		// Keep connection alive for the duration of the test
-		for {
-			_, _, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-		}
-	}))
-	defer server.Close()
-
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
-
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	poolMonitor.disableAutoRediscovery = true // We'll manually control re-discovery
-
-	// Set up state: in re-discovery mode with failures
-	poolMonitor.inRediscoveryMode = true
-	poolMonitor.consecutiveFailures = 5
-
-	// Mock successful re-discovery by updating IP to a working server
-	poolMonitor.updateIntelliCenterIP(urlParts[0])
-
-	// Manually trigger re-discovery success path
-	// In real scenario, attemptRediscovery would be called, but we can't easily test that
-	// without a real IntelliCenter. Instead, we test the success handling.
-	poolMonitor.handlePollingSuccess()
-
-	// Verify re-discovery mode exited and failures reset
-	if poolMonitor.inRediscoveryMode {
-		t.Error("Should exit re-discovery mode after success")
-	}
-	if poolMonitor.consecutiveFailures != 0 {
-		t.Errorf("Should reset consecutive failures after success, got %d", poolMonitor.consecutiveFailures)
-	}
+	// Second pass - should not produce changes.
+	applyAll()
 }
 
 // Tests for refactored command-line and configuration functions.
@@ -3714,55 +2278,34 @@ func TestActiveFeatureKeyTracking(t *testing.T) {
 }
 
 func TestStaleMetricCleanupIntegration(t *testing.T) {
-	// First call returns two circuits
-	firstResponse := map[string]IntelliCenterResponse{
-		"GetParamList:OBJTYP=CIRCUIT": {
-			Command:  "GetParamList",
-			Response: "200",
-			ObjectList: []ObjectData{
-				{
-					ObjName: "C01",
-					Params: map[string]string{
-						"SNAME":  "Pool Light",
-						"STATUS": "ON",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "LIGHT",
-					},
-				},
-				{
-					ObjName: "C02",
-					Params: map[string]string{
-						"SNAME":  "Spa Light",
-						"STATUS": "ON",
-						"OBJTYP": "CIRCUIT",
-						"SUBTYP": "LIGHT",
-					},
-				},
+	// First call returns two circuits.
+	objs := []ObjectData{
+		{
+			ObjName: "C01",
+			Params: map[string]string{
+				"SNAME":  "Pool Light",
+				"STATUS": "ON",
+				"OBJTYP": "CIRCUIT",
+				"SUBTYP": "LIGHT",
+			},
+		},
+		{
+			ObjName: "C02",
+			Params: map[string]string{
+				"SNAME":  "Spa Light",
+				"STATUS": "ON",
+				"OBJTYP": "CIRCUIT",
+				"SUBTYP": "LIGHT",
 			},
 		},
 	}
 
-	server := createMockWebSocketServer(t, firstResponse)
-	defer server.Close()
+	poolMonitor := NewPoolMonitor("test", "6680", false)
 
-	wsURL := strings.Replace(server.URL, "http://", "ws://", 1)
-	urlParts := strings.Split(strings.TrimPrefix(wsURL, "ws://"), ":")
+	// First call - should track both circuits.
+	poolMonitor.applyCircuitStatus(objs)
 
-	poolMonitor := NewPoolMonitor(urlParts[0], urlParts[1], false)
-	ctx := t.Context()
-
-	if err := poolMonitor.Connect(ctx); err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer poolMonitor.Close()
-
-	// First call - should track both circuits
-	err := poolMonitor.getCircuitStatus()
-	if err != nil {
-		t.Fatalf("First getCircuitStatus failed: %v", err)
-	}
-
-	// Verify both keys are tracked
+	// Verify both keys are tracked.
 	if !poolMonitor.activeCircuitKeys["C01|Pool Light|LIGHT"] {
 		t.Error("expected C01 to be tracked after first call")
 	}

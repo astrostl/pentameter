@@ -11,8 +11,7 @@ import (
 
 // runMetricsEngine serves Prometheus metrics driven by the intellicenter.Engine:
 // gauges refresh on every IntelliCenter push (real-time) with the engine's poll
-// as a safety net. Opt-in via -engine / PENTAMETER_ENGINE; the legacy poll path
-// (StartTemperaturePolling) is left untouched as the default.
+// as a safety net.
 //
 // The PoolMonitor here is used purely as the interpretation + metric-state holder
 // (listenMode=false, never connected); the engine owns the connection, push
@@ -82,9 +81,9 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 }
 
 // refreshFromEngine recomputes every metric from the engine's current raw snapshot,
-// reproducing a legacy full poll. Object groups are applied in the same order as
-// GetAllEquipmentStatus (bodies → air → pumps → freeze → circuits → thermal) so
-// dependent state (referenced heaters, freeze-protection active) is set first.
+// reproducing a full poll. Object groups are applied in a fixed order
+// (bodies → air → pumps → freeze → circuits → thermal) so dependent state
+// (referenced heaters, freeze-protection active) is set first.
 func (pm *PoolMonitor) refreshFromEngine(e *intellicenter.Engine) {
 	pm.featureConfig = e.Config()
 

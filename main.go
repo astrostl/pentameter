@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -37,9 +35,6 @@ const (
 	// Listen mode polling interval (catches equipment that doesn't push).
 	listenModePollInterval = 10
 
-	// Re-discovery failure threshold (number of consecutive failures before attempting re-discovery).
-	defaultFailureThreshold = 3
-
 	// Metric key parts count (objnam|name|subtype).
 	metricKeyPartsCount = 3
 
@@ -66,9 +61,6 @@ const (
 	objTypeHeater  = "HEATER"
 	objTypeCircGrp = "CIRCGRP"
 
-	// Reconnect retry delay.
-	reconnectRetryDelay = 5 * time.Second
-
 	// Thermal status constants.
 	thermalStatusOff      = 0
 	thermalStatusHeating  = 1
@@ -81,11 +73,6 @@ const (
 
 	// Protocol command names.
 	cmdGetParamList = "GetParamList"
-	cmdGetQuery     = "GetQuery"
-
-	// Query conditions.
-	condBody    = "OBJTYP=BODY"
-	condCircuit = "OBJTYP=CIRCUIT"
 
 	// Param keys / JSON field names.
 	fieldObjnam = "objnam"
@@ -94,11 +81,9 @@ const (
 	keyHTMODE   = "HTMODE"
 	keyPROBE    = "PROBE"
 	keyACT      = "ACT"
-	keyGPM      = "GPM"
 
 	// Special object names.
 	objnamIncr       = "INCR"
-	objnamAirSensor  = "_A135"
 	objnamFreezeFeat = "_FEA2"
 
 	// Subtype / body-name values.
@@ -119,7 +104,6 @@ const (
 	logFieldHeater  = "heater"
 	fieldName       = "name"
 	fieldSubtyp     = "subtyp"
-	fieldCommand    = "command"
 
 	// Additional param keys.
 	keyHTSRC   = "HTSRC"
@@ -131,9 +115,7 @@ const (
 	keySUBTYP  = "SUBTYP"
 	keyLOTMP   = "LOTMP"
 	keyHITMP   = "HITMP"
-	keyWATTS   = "WATTS" // garbage echo on current firmware; real power is keyPWR
-	keyPWR     = "PWR"   // pump real power draw (watts)
-	keySPEED   = "SPEED"
+	keyPWR     = "PWR" // pump real power draw (watts)
 	keyPARENT  = "PARENT"
 	keyUSE     = "USE"
 	keyLISTORD = "LISTORD"
@@ -235,7 +217,6 @@ var (
 )
 
 type PoolMonitor struct {
-	lastHealthCheck        time.Time
 	lastRefresh            time.Time
 	ic                     *intellicenter.Client     // IntelliCenter transport + protocol
 	bodyHeatingStatus      map[string]bool           // Track which bodies are actively heating
@@ -246,19 +227,11 @@ type PoolMonitor struct {
 	activeCircuitKeys      map[string]bool           // Track active circuit metric keys for stale cleanup
 	activeFeatureKeys      map[string]bool           // Track active feature metric keys for stale cleanup
 	previousState          *EquipmentState           // Previous state for change detection
-	intelliCenterURL       string
-	intelliCenterIP        string     // Store IP separately for re-discovery
-	intelliCenterPort      string     // Store port for URL reconstruction
-	consecutiveFailures    int        // Track consecutive connection failures for re-discovery
-	failureThreshold       int        // Number of failures before attempting re-discovery
-	mu                     sync.Mutex // Protects concurrent access in listen mode
-	connected              bool
-	quiet                  bool // Suppress per-object "Updated ..." logs (engine push-driven recomputes)
-	listenMode             bool // Enable live event logging mode (includes raw JSON output)
-	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
-	freezeProtectionActive bool // Track if freeze protection is currently active
-	inRediscoveryMode      bool // Currently attempting re-discovery
-	disableAutoRediscovery bool // Disable automatic re-discovery (for testing)
+	mu                     sync.Mutex                // Protects concurrent access in listen mode
+	quiet                  bool                      // Suppress per-object "Updated ..." logs (engine push-driven recomputes)
+	listenMode             bool                      // Enable live event logging mode (includes raw JSON output)
+	initialPollDone        bool                      // Track if initial poll completed (suppresses "detected" logs after first poll)
+	freezeProtectionActive bool                      // Track if freeze protection is currently active
 }
 
 // CircGrpState tracks the state of a circuit group member.
@@ -296,11 +269,7 @@ type BodyHeaterInfo struct {
 
 func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) *PoolMonitor {
 	return &PoolMonitor{
-		intelliCenterURL:       fmt.Sprintf("ws://%s", net.JoinHostPort(intelliCenterIP, intelliCenterPort)),
-		intelliCenterIP:        intelliCenterIP,
-		intelliCenterPort:      intelliCenterPort,
 		ic:                     intellicenter.New(intelliCenterIP, intelliCenterPort),
-		connected:              false,
 		bodyHeatingStatus:      make(map[string]bool),
 		referencedHeaters:      make(map[string]BodyHeaterInfo),
 		featureConfig:          make(map[string]string),
@@ -311,144 +280,11 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		previousState:          nil,
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
-		consecutiveFailures:    0,
-		failureThreshold:       defaultFailureThreshold,
-		inRediscoveryMode:      false,
-		disableAutoRediscovery: false,
 	}
 }
 
 // Connect establishes the IntelliCenter connection (with retry/backoff). The
 // transport now lives in the intellicenter package; PoolMonitor delegates.
-func (pm *PoolMonitor) Connect(ctx context.Context) error {
-	if err := pm.ic.ConnectWithRetry(ctx); err != nil {
-		pm.connected = false
-		return err
-	}
-	pm.connected = true
-	pm.lastHealthCheck = time.Now()
-	log.Printf("Connected to IntelliCenter at %s:%s", pm.intelliCenterIP, pm.intelliCenterPort)
-	return nil
-}
-
-// StartEventListener runs a hybrid listen mode.
-// It listens for real-time push notifications AND polls periodically to catch
-// equipment types that IntelliCenter doesn't push (like pump RPM changes).
-// Outputs both human-readable summaries and raw JSON for all messages.
-func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time.Duration) {
-	// Initialize state tracking
-	pm.initializeState()
-
-	// Do one initial poll to establish baseline state
-	log.Println("Fetching initial equipment state...")
-	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
-		log.Printf("Warning: initial state fetch failed: %v", err)
-	}
-	pm.initialPollDone = true
-
-	log.Println("Listening for real-time changes (Ctrl+C to stop)...")
-
-	// Create a separate poller with its own connection
-	poller := &PoolMonitor{
-		intelliCenterIP:   pm.intelliCenterIP,
-		intelliCenterPort: pm.intelliCenterPort,
-		intelliCenterURL:  pm.intelliCenterURL,
-		// Its own client = its own connection, avoiding conflicts with the
-		// listen loop's streaming reads on the main connection.
-		ic:                  intellicenter.New(pm.intelliCenterIP, pm.intelliCenterPort),
-		listenMode:          pm.listenMode,
-		initialPollDone:     true,             // Initial poll already done by main monitor
-		previousState:       pm.previousState, // Share state for change detection
-		bodyHeatingStatus:   pm.bodyHeatingStatus,
-		referencedHeaters:   pm.referencedHeaters,
-		featureConfig:       pm.featureConfig,
-		circuitFreezeConfig: pm.circuitFreezeConfig,
-		circuitNames:        pm.circuitNames,
-	}
-
-	// Start poller in background with its own connection
-	go pm.pollLoop(ctx, poller, pollInterval)
-
-	// Listen for push notifications in foreground using main connection
-	pm.listenLoop(ctx)
-}
-
-// pollLoop polls periodically to catch equipment that doesn't push.
-// Uses a separate connection to avoid conflicts with the listen loop.
-func (pm *PoolMonitor) pollLoop(ctx context.Context, poller *PoolMonitor, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Connect the poller
-	if err := poller.EnsureConnected(ctx); err != nil {
-		log.Printf("Poller connection failed: %v", err)
-		return
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			poller.Close()
-			return
-		case <-ticker.C:
-			pm.mu.Lock()
-			pm.previousState.PollChangeCount = 0
-			err := poller.GetAllEquipmentStatus(ctx)
-			changes := pm.previousState.PollChangeCount
-			pm.mu.Unlock()
-			if err != nil {
-				log.Printf("Poll error: %v", err)
-				// Try to reconnect poller
-				if err := poller.EnsureConnected(ctx); err != nil {
-					log.Printf("Poller reconnection failed: %v", err)
-				}
-			} else if changes == 0 {
-				log.Println("POLL: [no changes]")
-			}
-		}
-	}
-}
-
-// listenLoop listens for push notifications.
-func (pm *PoolMonitor) listenLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Event listener stopped")
-			return
-		default:
-			rawMsg, err := pm.ic.ReadMessage()
-			if err != nil {
-				log.Printf("Connection error: %v", err)
-				if err := pm.EnsureConnected(ctx); err != nil {
-					log.Printf("Reconnection failed: %v", err)
-					time.Sleep(reconnectRetryDelay)
-				} else {
-					// Reconnected - reset state to get full report on next poll
-					pm.mu.Lock()
-					pm.initialPollDone = false
-					pm.previousState = nil
-					pm.initializeState()
-					log.Println("Reconnected - fetching full equipment state...")
-					if err := pm.GetAllEquipmentStatus(ctx); err != nil {
-						log.Printf("Warning: state fetch failed: %v", err)
-					}
-					pm.initialPollDone = true
-					pm.mu.Unlock()
-				}
-				continue
-			}
-
-			pm.mu.Lock()
-			// Process push notifications for pretty output
-			pm.processRawPushNotification(rawMsg)
-			// Also output the raw JSON
-			pm.outputRawJSON("PUSH", rawMsg)
-			pm.mu.Unlock()
-		}
-	}
-}
-
 // outputRawJSON outputs the raw JSON message to the log with a prefix.
 func (pm *PoolMonitor) outputRawJSON(prefix string, msg map[string]interface{}) {
 	jsonBytes, err := json.Marshal(msg)
@@ -614,65 +450,6 @@ func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
 	log.Printf("PUSH: unknown %s: %s", obj.ObjName, string(jsonBytes))
 }
 
-func (pm *PoolMonitor) GetAllEquipmentStatus(_ context.Context) error {
-	if !pm.ic.Connected() {
-		return fmt.Errorf("not connected to IntelliCenter")
-	}
-
-	// Get body temperatures
-	if err := pm.getBodyTemperatures(); err != nil {
-		return fmt.Errorf("failed to get body temperatures: %w", err)
-	}
-
-	// Get air temperature
-	if err := pm.getAirTemperature(); err != nil {
-		return fmt.Errorf("failed to get air temperature: %w", err)
-	}
-
-	// Get pump data
-	if err := pm.getPumpData(); err != nil {
-		return fmt.Errorf("failed to get pump data: %w", err)
-	}
-
-	// Get freeze protection status (must be before circuit status)
-	if err := pm.getFreezeProtectionStatus(); err != nil {
-		return fmt.Errorf("failed to get freeze protection status: %w", err)
-	}
-
-	// Get circuit status
-	if err := pm.getCircuitStatus(); err != nil {
-		return fmt.Errorf("failed to get circuit status: %w", err)
-	}
-
-	// Get thermal equipment status
-	if err := pm.getThermalStatus(); err != nil {
-		return fmt.Errorf("failed to get thermal status: %w", err)
-	}
-
-	// In listen mode, query circuit groups and ALL objects to discover unknown equipment
-	if pm.listenMode {
-		if err := pm.getCircuitGroups(); err != nil {
-			// Don't fail the whole poll if this fails, just log it
-			pm.logIfNotListeningf("Warning: failed to get circuit groups: %v", err)
-		}
-		if err := pm.getAllObjects(); err != nil {
-			// Don't fail the whole poll if this fails, just log it
-			pm.logIfNotListeningf("Warning: failed to get all objects: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func (pm *PoolMonitor) getBodyTemperatures() error {
-	resp, err := pm.requestBodyTemperatures()
-	if err != nil {
-		return err
-	}
-	pm.applyBodyTemperatures(resp.ObjectList)
-	return nil
-}
-
 // applyBodyTemperatures updates body metrics and collects heater assignments from
 // a set of body objects (sourced either from a live query or the engine snapshot).
 func (pm *PoolMonitor) applyBodyTemperatures(objs []ObjectData) {
@@ -682,20 +459,6 @@ func (pm *PoolMonitor) applyBodyTemperatures(objs []ObjectData) {
 	}
 	// Store referenced heaters for heater status processing
 	pm.referencedHeaters = referencedHeaters
-}
-
-func (pm *PoolMonitor) requestBodyTemperatures() (*IntelliCenterResponse, error) {
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: condBody,
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamIncr,
-				Keys:    []string{keySNAME, keySTATUS, keyTEMP, keySUBTYP, keyHTMODE, keyHTSRC, keyLOTMP, keyHITMP},
-			},
-		},
-	}
-	return pm.ic.Do(req)
 }
 
 func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[string]BodyHeaterInfo) {
@@ -780,26 +543,6 @@ func (pm *PoolMonitor) processHeaterAssignment(
 	}
 }
 
-func (pm *PoolMonitor) getAirTemperature() error {
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: "",
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamAirSensor,
-				Keys:    []string{keySNAME, keySTATUS, keyPROBE, keySUBTYP},
-			},
-		},
-	}
-
-	resp, err := pm.ic.Do(req)
-	if err != nil {
-		return fmt.Errorf("air temp request: %w", err)
-	}
-	pm.applyAirTemperature(resp.ObjectList)
-	return nil
-}
-
 // applyAirTemperature updates the air-temperature metric from a set of sensor objects.
 func (pm *PoolMonitor) applyAirTemperature(objs []ObjectData) {
 	for _, obj := range objs {
@@ -823,15 +566,6 @@ func (pm *PoolMonitor) applyAirTemperature(objs []ObjectData) {
 	}
 }
 
-func (pm *PoolMonitor) getPumpData() error {
-	resp, responseTime, err := pm.requestPumpData()
-	if err != nil {
-		return err
-	}
-	pm.applyPumpData(resp.ObjectList, responseTime)
-	return nil
-}
-
 // applyPumpData updates pump metrics from a set of pump objects. responseTime is
 // for logging only (0 when sourced from the engine snapshot rather than a query).
 func (pm *PoolMonitor) applyPumpData(objs []ObjectData, responseTime time.Duration) {
@@ -840,26 +574,6 @@ func (pm *PoolMonitor) applyPumpData(objs []ObjectData, responseTime time.Durati
 			log.Printf("Failed to process pump object %s: %v", obj.ObjName, err)
 		}
 	}
-}
-
-func (pm *PoolMonitor) getFreezeProtectionStatus() error {
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: condCircuit,
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamFreezeFeat,
-				Keys:    []string{keySNAME, keySTATUS},
-			},
-		},
-	}
-
-	resp, err := pm.ic.Do(req)
-	if err != nil {
-		return fmt.Errorf("freeze protection status request: %w", err)
-	}
-	pm.applyFreezeProtection(resp.ObjectList)
-	return nil
 }
 
 // applyFreezeProtection sets freezeProtectionActive from the _FEA2 feature's status.
@@ -878,15 +592,6 @@ func (pm *PoolMonitor) applyFreezeProtection(objs []ObjectData) {
 	if !pm.freezeProtectionActive {
 		pm.logIfNotListeningf("Freeze protection is inactive")
 	}
-}
-
-func (pm *PoolMonitor) getCircuitStatus() error {
-	resp, err := pm.requestCircuitData()
-	if err != nil {
-		return err
-	}
-	pm.applyCircuitStatus(resp.ObjectList)
-	return nil
 }
 
 // applyCircuitStatus updates circuit + feature metrics from a set of circuit
@@ -923,20 +628,6 @@ func (pm *PoolMonitor) cleanupStaleMetrics(previous, current map[string]bool, me
 			}
 		}
 	}
-}
-
-func (pm *PoolMonitor) requestCircuitData() (*IntelliCenterResponse, error) {
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: condCircuit,
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamIncr,
-				Keys:    []string{keySNAME, keySTATUS, keyOBJTYP, keySUBTYP, keyFREEZE},
-			},
-		},
-	}
-	return pm.ic.Do(req)
 }
 
 func (pm *PoolMonitor) processCircuitObject(obj ObjectData) {
@@ -1084,30 +775,6 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string, fre
 	return statusValue
 }
 
-func (pm *PoolMonitor) getThermalStatus() error {
-	// Process all heaters, not just referenced ones
-
-	// Query all heaters, not just referenced ones
-
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: "OBJTYP=HEATER",
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamIncr,
-				Keys:    []string{keySNAME, keySTATUS, keySUBTYP, keyOBJTYP},
-			},
-		},
-	}
-
-	resp, err := pm.ic.Do(req)
-	if err != nil {
-		return fmt.Errorf("thermal status request: %w", err)
-	}
-	pm.applyThermalStatus(resp.ObjectList)
-	return nil
-}
-
 // applyThermalStatus updates thermal (heater) metrics from a set of heater objects.
 func (pm *PoolMonitor) applyThermalStatus(objs []ObjectData) {
 	for _, obj := range objs {
@@ -1252,27 +919,6 @@ func (pm *PoolMonitor) getStatusDescription(status int) string {
 	}
 }
 
-func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration, error) {
-	req := IntelliCenterRequest{
-		Command:   cmdGetParamList,
-		Condition: "OBJTYP=PUMP",
-		ObjectList: []ObjectQuery{
-			{
-				ObjName: objnamIncr,
-				Keys:    []string{keySNAME, keySTATUS, keyRPM, keyPWR, keyWATTS, keyGPM, keySPEED},
-			},
-		},
-	}
-
-	sentTime := time.Now()
-	resp, err := pm.ic.Do(req)
-	responseTime := time.Since(sentTime)
-	if err != nil {
-		return nil, 0, fmt.Errorf("pump data request: %w", err)
-	}
-	return resp, responseTime, nil
-}
-
 func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Duration) error {
 	name := obj.Params[keySNAME]
 	rpmStr := obj.Params[keyRPM]
@@ -1298,170 +944,9 @@ func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status s
 	pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
 }
 
-func (pm *PoolMonitor) IsHealthy(_ context.Context) bool {
-	if !pm.connected {
-		return false
-	}
-	if !pm.ic.Healthy() {
-		pm.connected = false
-		return false
-	}
-	pm.lastHealthCheck = time.Now()
-	return true
-}
-
-func (pm *PoolMonitor) EnsureConnected(ctx context.Context) error {
-	if pm.IsHealthy(ctx) {
-		return nil
-	}
-	if pm.ic.Connected() {
-		log.Println("Connection unhealthy, attempting to reconnect...")
-	}
-	pm.Close()
-	return pm.Connect(ctx)
-}
-
-func (pm *PoolMonitor) Close() {
-	pm.connected = false
-	pm.ic.Close()
-}
-
-func (pm *PoolMonitor) StartTemperaturePolling(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	pm.performInitialPolling(ctx)
-	pm.runPollingLoop(ctx, ticker)
-}
-
-func (pm *PoolMonitor) performInitialPolling(ctx context.Context) {
-	if err := pm.EnsureConnected(ctx); err != nil {
-		log.Printf("Failed to establish initial connection: %v", err)
-		return
-	}
-
-	if err := pm.LoadFeatureConfiguration(ctx); err != nil {
-		log.Printf("Failed to load feature configuration: %v", err)
-		return
-	}
-
-	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
-		log.Printf("Failed to get initial equipment status: %v", err)
-		return
-	}
-
-	pm.updateRefreshTimestamp()
-}
-
-func (pm *PoolMonitor) runPollingLoop(ctx context.Context, ticker *time.Ticker) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Temperature polling stopped")
-			return
-		case <-ticker.C:
-			pm.handlePollingTick(ctx)
-		}
-	}
-}
-
-func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
-	// Check if we need to enter re-discovery mode (only if auto-discovery is enabled)
-	if !pm.disableAutoRediscovery && !pm.inRediscoveryMode && pm.consecutiveFailures >= pm.failureThreshold {
-		log.Printf("Connection failed %d times, entering re-discovery mode", pm.consecutiveFailures)
-		pm.inRediscoveryMode = true
-	}
-
-	// If in re-discovery mode, attempt re-discovery instead of normal connection
-	if pm.inRediscoveryMode {
-		if pm.attemptRediscovery(ctx) {
-			// Re-discovery succeeded, exit re-discovery mode and reset failure counter
-			pm.inRediscoveryMode = false
-			pm.consecutiveFailures = 0
-			log.Printf("Re-discovery successful, resuming normal operation")
-			// Fall through to attempt normal polling
-		} else {
-			// Re-discovery failed, stay in re-discovery mode and try again next interval
-			connectionFailure.Set(1)
-			return
-		}
-	}
-
-	// Normal connection and polling
-	if err := pm.EnsureConnected(ctx); err != nil {
-		log.Printf("Failed to ensure connection: %v", err)
-		pm.handlePollingError(err)
-		return
-	}
-
-	if err := pm.GetAllEquipmentStatus(ctx); err != nil {
-		pm.handlePollingError(err)
-		return
-	}
-
-	pm.handlePollingSuccess()
-}
-
-func (pm *PoolMonitor) handlePollingError(err error) {
-	log.Printf("Failed to get equipment status: %v", err)
-	if !pm.listenMode {
-		pm.connected = false
-	}
-	pm.consecutiveFailures++
-	connectionFailure.Set(1)
-}
-
-func (pm *PoolMonitor) handlePollingSuccess() {
-	pm.updateRefreshTimestamp()
-	pm.consecutiveFailures = 0   // Reset failure counter on success
-	pm.inRediscoveryMode = false // Exit re-discovery mode if we were in it
-	connectionFailure.Set(0)
-}
-
 func (pm *PoolMonitor) updateRefreshTimestamp() {
 	pm.lastRefresh = time.Now()
 	lastRefreshTimestamp.Set(float64(pm.lastRefresh.Unix()))
-}
-
-// updateIntelliCenterIP updates the IP address and reconstructs the WebSocket URL.
-func (pm *PoolMonitor) updateIntelliCenterIP(newIP string) {
-	pm.intelliCenterIP = newIP
-	pm.intelliCenterURL = fmt.Sprintf("ws://%s", net.JoinHostPort(newIP, pm.intelliCenterPort))
-	pm.connected = false // Force reconnection with new IP
-}
-
-// attemptRediscovery tries to discover the IntelliCenter via mDNS and update the IP.
-// Returns true if discovery succeeded and IP was updated, false otherwise.
-//
-// Note: This function is not unit tested because it requires real mDNS discovery
-// and an actual IntelliCenter on the network. The surrounding logic (failure counting,
-// threshold detection, IP updating) is thoroughly tested. Integration testing of this
-// function would require network hardware and make tests non-deterministic.
-func (pm *PoolMonitor) attemptRediscovery(ctx context.Context) bool {
-	log.Printf("Attempting IntelliCenter re-discovery via mDNS...")
-
-	discoveredIP, err := DiscoverIntelliCenter(false) // non-verbose for automatic re-discovery
-	if err != nil {
-		log.Printf("Re-discovery failed: %v (will retry on next poll)", err)
-		return false
-	}
-
-	if discoveredIP == pm.intelliCenterIP {
-		log.Printf("Re-discovery found same IP (%s), connection issue may be temporary", discoveredIP)
-		return false
-	}
-
-	log.Printf("Re-discovery successful! IntelliCenter found at new IP: %s (was: %s)", discoveredIP, pm.intelliCenterIP)
-	pm.updateIntelliCenterIP(discoveredIP)
-
-	// Attempt to connect with new IP
-	if err := pm.Connect(ctx); err != nil {
-		log.Printf("Failed to connect to re-discovered IP %s: %v", discoveredIP, err)
-		return false
-	}
-
-	log.Printf("Successfully reconnected to IntelliCenter at new IP: %s", discoveredIP)
-	return true
 }
 
 func getEnvOrDefault(envVar, defaultValue string) string {
@@ -1475,58 +960,6 @@ func (pm *PoolMonitor) logIfNotListeningf(format string, v ...interface{}) {
 	if !pm.listenMode && !pm.quiet {
 		log.Printf(format, v...)
 	}
-}
-
-func (pm *PoolMonitor) LoadFeatureConfiguration(_ context.Context) error {
-	resp, err := pm.ic.DoRaw(map[string]any{
-		fieldCommand: cmdGetQuery,
-		"queryName":  "GetConfiguration",
-		"arguments":  "",
-	})
-	if err != nil {
-		return fmt.Errorf("configuration request: %w", err)
-	}
-
-	// Parse configuration data
-	pm.parseFeatureConfiguration(resp)
-
-	return nil
-}
-
-func (pm *PoolMonitor) parseFeatureConfiguration(resp map[string]interface{}) {
-	answer, ok := resp["answer"].([]interface{})
-	if !ok {
-		return
-	}
-
-	for _, item := range answer {
-		pm.processConfigurationItem(item)
-	}
-}
-
-func (pm *PoolMonitor) processConfigurationItem(item interface{}) {
-	obj, objOK := item.(map[string]interface{})
-	if !objOK {
-		return
-	}
-
-	objName, nameOK := obj[fieldObjnam].(string)
-	if !nameOK || !strings.HasPrefix(objName, "FTR") {
-		return
-	}
-
-	params, paramsOK := obj[fieldParams].(map[string]interface{})
-	if !paramsOK {
-		return
-	}
-
-	shomnu, shomnuOK := params["SHOMNU"].(string)
-	if !shomnuOK {
-		return
-	}
-
-	pm.featureConfig[objName] = shomnu
-	log.Printf("Loaded feature config: %s -> %s", objName, shomnu)
 }
 
 func (pm *PoolMonitor) initializeState() {

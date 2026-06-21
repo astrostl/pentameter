@@ -10,8 +10,7 @@ import (
 // runListenEngine serves listen/troubleshooting mode driven by the
 // intellicenter.Engine: raw protocol traffic is dumped as the engine receives
 // it, reusing the engine's connection/baseline/reconnect/poll machinery instead
-// of a second hand-rolled connection loop. Opt-in via -engine -listen; the
-// legacy StartEventListener path is left untouched as the default.
+// of a second hand-rolled connection loop.
 //
 // The PoolMonitor here is the interpretation + diff-state holder (never connected
 // itself); the engine owns the connection. Two hooks reproduce the legacy output:
