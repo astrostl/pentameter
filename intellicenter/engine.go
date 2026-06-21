@@ -79,6 +79,12 @@ type Engine struct {
 	// nil = silent, so the package stays output-agnostic.
 	Logf func(format string, args ...any)
 
+	// OnScan, if set, is called after each full scan attempt (baseline + every
+	// poll) and on connect/session failures, with the error (nil = success). It
+	// lets consumers track liveness gauges (e.g. connection-failure / last-refresh)
+	// without the engine knowing anything about metrics.
+	OnScan func(err error)
+
 	mu     sync.RWMutex
 	kind   map[string]Kind
 	params map[string]map[string]string
@@ -108,6 +114,12 @@ func NewEngine(host, port string, pollEvery time.Duration) *Engine {
 func (e *Engine) logf(format string, args ...any) {
 	if e.Logf != nil {
 		e.Logf(format, args...)
+	}
+}
+
+func (e *Engine) onScan(err error) {
+	if e.OnScan != nil {
+		e.OnScan(err)
 	}
 }
 
@@ -223,11 +235,14 @@ func (e *Engine) Run(ctx context.Context) error {
 
 		if err := req.ConnectWithRetry(ctx); err != nil {
 			e.logf("engine: connect (req) failed: %v", err)
+			e.onScan(err)
 		} else if err := push.ConnectWithRetry(ctx); err != nil {
 			e.logf("engine: connect (push) failed: %v", err)
+			e.onScan(err)
 			req.Close()
 		} else if err := e.session(ctx, req, push); err != nil {
 			e.logf("engine: session ended: %v", err)
+			e.onScan(err)
 		}
 
 		req.Close()
@@ -251,6 +266,7 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 	}
 	e.loadConfig(req) // best-effort: feature visibility, never fatal to a session
 	e.setReqClient(req)
+	e.onScan(nil) // baseline succeeded → live
 	e.logf("engine: connected to %s:%s (baseline complete)", e.host, e.port)
 
 	pollCtx, cancelPoll := context.WithCancel(ctx)
@@ -269,9 +285,11 @@ func (e *Engine) pollLoop(ctx context.Context, req *Client) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := e.scan(req); err != nil {
+			err := e.scan(req)
+			if err != nil {
 				e.logf("engine: poll error: %v", err)
 			}
+			e.onScan(err)
 		}
 	}
 }

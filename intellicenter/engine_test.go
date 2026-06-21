@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,14 +80,21 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	addr := strings.TrimPrefix(mock.srv.URL, "http://")
 	host, port, _ := strings.Cut(addr, ":")
 	e := NewEngine(host, port, time.Hour) // long poll so only baseline + push fire
+	var sawScanOK atomic.Bool
+	e.OnScan = func(err error) {
+		if err == nil {
+			sawScanOK.Store(true)
+		}
+	}
 	ch := e.Subscribe()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = e.Run(ctx) }()
 
-	// Baseline should populate the snapshot.
+	// Baseline should populate the snapshot and fire OnScan(nil).
 	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
+	waitFor(t, sawScanOK.Load)
 	snap := e.Snapshot()
 	if snap.Bodies["B1101"].Temp != 82 || !snap.Sensors[airSensorObjnam].Valid {
 		t.Fatalf("baseline snapshot incomplete: %+v", snap)
