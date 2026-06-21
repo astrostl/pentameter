@@ -150,26 +150,74 @@ func runHomebridge(cfg *appConfig) {
 type hbPublisher struct {
 	mu        sync.Mutex
 	published bool
+	lastSig   string // membership signature of the last announced accessory list
 }
 
-// announce (re)publishes the accessory list with current state and marks the
-// shim ready, mirroring the old per-session announce on each (re)connect.
+// announce publishes the accessory list with current state and marks the shim
+// ready, mirroring the old per-session announce on each (re)connect.
 func (p *hbPublisher) announce(engine *intellicenter.Engine, out *hbEmitter) {
-	snap := engine.Snapshot()
-	items := hbCircuitItems(snap)
-	thermos := hbThermostatItems(snap)
-	out.accessories(append(items, thermos...))
+	items := hbAllItems(engine.Snapshot())
+	out.accessories(items)
 	out.ready()
 	p.mu.Lock()
 	p.published = true
+	p.lastSig = accessorySignature(items)
 	p.mu.Unlock()
-	log.Printf("[homebridge] published %d circuits, %d thermostats", len(items), len(thermos))
+	log.Printf("[homebridge] published %d accessories", len(items))
+}
+
+// resync re-announces only when the *set* of accessories changed (a Feature or
+// heater appeared/disappeared, a rename, cool-capability flip) since the last
+// announce — so an IntelliCenter config change self-heals on the next poll
+// without a sidecar restart. State-only changes flow through state/tstate and
+// don't trip this, so there's no announce spam.
+func (p *hbPublisher) resync(engine *intellicenter.Engine, out *hbEmitter) {
+	items := hbAllItems(engine.Snapshot())
+	sig := accessorySignature(items)
+	p.mu.Lock()
+	changed := p.published && sig != p.lastSig
+	if changed {
+		p.lastSig = sig
+	}
+	p.mu.Unlock()
+	if !changed {
+		return
+	}
+	out.accessories(items)
+	log.Printf("[homebridge] accessory set changed; re-announced %d accessories", len(items))
 }
 
 func (p *hbPublisher) isPublished() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.published
+}
+
+// hbAllItems is the full announced accessory list: circuits (Features) then
+// thermostats, each already sorted by ID for stable output.
+func hbAllItems(snap intellicenter.Snapshot) []hbAccessory {
+	return append(hbCircuitItems(snap), hbThermostatItems(snap)...)
+}
+
+// accessorySignature captures the membership-relevant identity of the accessory
+// list (which accessories exist, their name/kind/cool-capability) but not their
+// live state — so it changes on add/remove/rename, not on an on/off or temp tick.
+func accessorySignature(items []hbAccessory) string {
+	var sig strings.Builder
+	for i := range items {
+		it := &items[i]
+		sig.WriteString(it.ID)
+		sig.WriteByte('|')
+		sig.WriteString(it.Name)
+		sig.WriteByte('|')
+		sig.WriteString(it.Kind)
+		sig.WriteByte('|')
+		if it.CanCool {
+			sig.WriteByte('c')
+		}
+		sig.WriteByte('\n')
+	}
+	return sig.String()
 }
 
 // hbRun wires an engine to the shim IPC and blocks on the engine run loop until
@@ -180,6 +228,8 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 	engine.OnRawPoll = func(_ *intellicenter.Client, baseline bool) {
 		if baseline {
 			pub.announce(engine, out)
+		} else {
+			pub.resync(engine, out)
 		}
 	}
 	go hbForwardChanges(engine.Subscribe(), out, pub)

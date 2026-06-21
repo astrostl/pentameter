@@ -144,6 +144,31 @@ func TestCToF(t *testing.T) {
 	}
 }
 
+// TestAccessorySignature confirms the signature tracks membership (id/name/kind/
+// cool) but ignores live state (on/temp/setpoint), so resync re-announces on
+// add/remove/rename but not on an on-off or temperature tick.
+func TestAccessorySignature(t *testing.T) {
+	on := []hbAccessory{{ID: "C1", Name: "Pool", Kind: hbKindSwitch, On: true}}
+	off := []hbAccessory{{ID: "C1", Name: "Pool", Kind: hbKindSwitch, On: false}}
+	if accessorySignature(on) != accessorySignature(off) {
+		t.Error("on/off should not change the signature")
+	}
+	renamed := []hbAccessory{{ID: "C1", Name: "Spa", Kind: hbKindSwitch}}
+	if accessorySignature(on) == accessorySignature(renamed) {
+		t.Error("rename should change the signature")
+	}
+	added := append([]hbAccessory{}, on...)
+	added = append(added, hbAccessory{ID: "C2", Name: "Light", Kind: hbKindSwitch})
+	if accessorySignature(on) == accessorySignature(added) {
+		t.Error("adding an accessory should change the signature")
+	}
+	heat := []hbAccessory{{ID: "B1", Name: "Pool", Kind: hbKindThermostat, CanCool: false}}
+	cool := []hbAccessory{{ID: "B1", Name: "Pool", Kind: hbKindThermostat, CanCool: true}}
+	if accessorySignature(heat) == accessorySignature(cool) {
+		t.Error("cool-capability flip should change the signature")
+	}
+}
+
 // TestHomebridgeEngineAnnounces drives the engine against a mock and asserts the
 // adapter announces the discovered circuits + ready over the IPC.
 func TestHomebridgeEngineAnnounces(t *testing.T) {
