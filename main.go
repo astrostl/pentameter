@@ -2013,7 +2013,7 @@ func main() {
 	cfg := parseCommandLineFlags()
 
 	if cfg.homebridge {
-		runHomebridge(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
+		runHomebridge(cfg)
 		return
 	}
 

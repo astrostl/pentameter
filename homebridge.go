@@ -17,24 +17,26 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/astrostl/pentameter/intellicenter"
 )
 
 const (
-	hbReconnectMinDelay = 2 * time.Second
-	hbReconnectMaxDelay = 30 * time.Second
-
 	hbCmdQueueSize = 32          // buffered set-command channel
 	hbStdinInitBuf = 64 * 1024   // initial stdin scanner buffer
 	hbStdinMaxBuf  = 1024 * 1024 // max stdin line length
+
+	hbKindSwitch = "switch" // HomeKit accessory kind for a circuit
+	hbMsgReady   = "ready"
+	hbMsgAccess  = "accessories"
+	hbMsgSet     = "set"
 )
 
 type hbAccessory struct {
@@ -56,7 +58,7 @@ type hbEmitter struct {
 	w  *bufio.Writer
 }
 
-func newHBEmitter() *hbEmitter { return &hbEmitter{w: bufio.NewWriter(os.Stdout)} }
+func newHBEmitter(w io.Writer) *hbEmitter { return &hbEmitter{w: bufio.NewWriter(w)} }
 
 func (e *hbEmitter) send(v any) {
 	e.mu.Lock()
@@ -70,133 +72,115 @@ func (e *hbEmitter) send(v any) {
 	_ = e.w.Flush()
 }
 
-func (e *hbEmitter) ready() { e.send(map[string]string{"t": "ready"}) }
+func (e *hbEmitter) ready() { e.send(map[string]string{"t": hbMsgReady}) }
 func (e *hbEmitter) accessories(items []hbAccessory) {
-	e.send(map[string]any{"t": "accessories", "items": items})
+	e.send(map[string]any{"t": hbMsgAccess, "items": items})
 }
 
 func (e *hbEmitter) state(id string, on bool) {
 	e.send(map[string]any{"t": "state", "id": id, "on": on})
 }
 
-// runHomebridge is the entry point for `pentameter -homebridge`. ip may be empty
-// to auto-discover. It owns its own resilient connect/reconnect loop.
-func runHomebridge(ip, port string, pollInterval time.Duration) {
+// runHomebridge is the entry point for `pentameter -homebridge`. It drives the
+// shim from the intellicenter.Engine: the engine owns connection, baseline,
+// reconnect, polling and mDNS rediscovery (via Resolve), while this adapter maps
+// engine events to the stdio IPC protocol. Circuit state reaches HomeKit in real
+// time off the engine's push stream instead of waiting for the next poll.
+func runHomebridge(cfg *appConfig) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	out := newHBEmitter()
+	out := newHBEmitter(os.Stdout)
 	cmds := make(chan hbSet, hbCmdQueueSize)
 	go hbReadStdin(ctx, cmds)
 
-	log.Printf("[homebridge] starting (poll=%v, configured ip=%q)", pollInterval, ip)
+	engine := intellicenter.NewEngine(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
+	engine.Logf = log.Printf
+	engine.Resolve = newDiscoveryResolver(cfg)
 
-	delay := hbReconnectMinDelay
-	for ctx.Err() == nil {
-		client, err := hbDial(ctx, ip, port)
-		if err != nil {
-			log.Printf("[homebridge] %v (retry in %s)", err, delay)
-			if !hbSleep(ctx, delay) {
-				break
-			}
-			delay = hbNextDelay(delay)
-			continue
-		}
-		delay = hbReconnectMinDelay
-
-		if err := hbServe(ctx, client, out, cmds, pollInterval); err != nil {
-			log.Printf("[homebridge] session ended: %v", err)
-		}
-		client.Close()
-		if !hbSleep(ctx, hbReconnectMinDelay) {
-			break
-		}
-	}
+	log.Printf("[homebridge] starting (poll=%v, configured ip=%q)", cfg.pollInterval, cfg.intelliCenterIP)
+	hbRun(ctx, engine, out, cmds)
 	log.Printf("[homebridge] shutting down")
 }
 
-// hbDial resolves the target (auto-discovering when ip is empty) and returns a
-// connected client.
-func hbDial(ctx context.Context, ip, port string) (*intellicenter.Client, error) {
-	target := ip
-	if target == "" {
-		discovered, err := DiscoverIntelliCenter(false)
-		if err != nil {
-			return nil, fmt.Errorf("discovery failed: %w", err)
-		}
-		log.Printf("[homebridge] discovered IntelliCenter at %s", discovered)
-		target = discovered
-	}
-	client := intellicenter.New(target, port)
-	if err := client.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connect failed: %w", err)
-	}
-	log.Printf("[homebridge] connected to %s:%s", target, port)
-	return client, nil
+// hbPublisher gates state emission: circuit changes are only meaningful to the
+// shim once the accessory list has been announced. It flips published at the
+// first baseline and stays so across reconnects (which re-announce idempotently).
+type hbPublisher struct {
+	mu        sync.Mutex
+	published bool
 }
 
-// hbServe runs one connected session: discover circuits, emit accessories, then
-// poll + handle set commands until an error forces a reconnect.
-func hbServe(ctx context.Context, client *intellicenter.Client, out *hbEmitter, cmds <-chan hbSet, pollInterval time.Duration) error {
-	circuits, err := client.Circuits()
-	if err != nil {
-		return err
-	}
-
-	state := make(map[string]bool, len(circuits))
-	items := make([]hbAccessory, 0, len(circuits))
-	for _, c := range circuits {
-		state[c.ID] = c.On
-		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: "switch", On: c.On})
-	}
+// announce (re)publishes the accessory list with current state and marks the
+// shim ready, mirroring the old per-session announce on each (re)connect.
+func (p *hbPublisher) announce(engine *intellicenter.Engine, out *hbEmitter) {
+	items := hbCircuitItems(engine.Snapshot())
 	out.accessories(items)
 	out.ready()
-	log.Printf("[homebridge] discovered %d circuits", len(items))
+	p.mu.Lock()
+	p.published = true
+	p.mu.Unlock()
+	log.Printf("[homebridge] published %d circuits", len(items))
+}
 
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
+func (p *hbPublisher) isPublished() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.published
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case cmd := <-cmds:
-			if err := hbHandleSet(client, out, state, cmd); err != nil {
-				return err
-			}
-		case <-ticker.C:
-			if err := hbPoll(client, out, state); err != nil {
-				return err
-			}
+// hbRun wires an engine to the shim IPC and blocks on the engine run loop until
+// ctx is canceled. Split out from runHomebridge so it can be driven in tests
+// with an in-memory emitter.
+func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cmds <-chan hbSet) {
+	pub := &hbPublisher{}
+	engine.OnRawPoll = func(_ *intellicenter.Client, baseline bool) {
+		if baseline {
+			pub.announce(engine, out)
+		}
+	}
+	go hbForwardChanges(engine.Subscribe(), out, pub)
+	go hbApplySets(engine, cmds)
+	_ = engine.Run(ctx)
+}
+
+// hbForwardChanges emits a state msg for every circuit change once accessories
+// have been announced. Pushes and poll diffs both arrive here.
+func hbForwardChanges(changes <-chan intellicenter.Change, out *hbEmitter, pub *hbPublisher) {
+	for ch := range changes {
+		if ch.Circuit != nil && pub.isPublished() {
+			out.state(ch.Circuit.ID, ch.Circuit.On)
 		}
 	}
 }
 
-// hbHandleSet applies a set command then re-polls so HomeKit reflects the
-// device's real state.
-func hbHandleSet(client *intellicenter.Client, out *hbEmitter, state map[string]bool, cmd hbSet) error {
-	if cmd.T != "set" {
-		return nil
-	}
-	if err := client.SetCircuit(cmd.ID, cmd.On); err != nil {
-		return err
-	}
-	return hbPoll(client, out, state)
-}
-
-// hbPoll queries current circuit state and emits an update for anything changed.
-func hbPoll(client *intellicenter.Client, out *hbEmitter, state map[string]bool) error {
-	circuits, err := client.Circuits()
-	if err != nil {
-		return err
-	}
-	for _, c := range circuits {
-		if prev, ok := state[c.ID]; !ok || prev != c.On {
-			state[c.ID] = c.On
-			out.state(c.ID, c.On)
+// hbApplySets applies set commands from the shim. Pushes report the resulting
+// state, so no explicit re-poll is needed.
+func hbApplySets(engine *intellicenter.Engine, cmds <-chan hbSet) {
+	for cmd := range cmds {
+		if cmd.T != hbMsgSet {
+			continue
+		}
+		if err := engine.SetCircuit(cmd.ID, cmd.On); err != nil {
+			log.Printf("[homebridge] set %s=%v failed: %v", cmd.ID, cmd.On, err)
 		}
 	}
-	return nil
+}
+
+// hbCircuitItems builds the accessory list from an engine snapshot, sorted by ID
+// for stable output across (re)announces.
+func hbCircuitItems(snap intellicenter.Snapshot) []hbAccessory {
+	ids := make([]string, 0, len(snap.Circuits))
+	for id := range snap.Circuits {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	items := make([]hbAccessory, 0, len(ids))
+	for _, id := range ids {
+		c := snap.Circuits[id]
+		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: hbKindSwitch, On: c.On})
+	}
+	return items
 }
 
 // hbReadStdin parses newline-JSON commands from the shim. If stdin closes the
@@ -224,21 +208,4 @@ func hbReadStdin(ctx context.Context, cmds chan<- hbSet) {
 		log.Printf("[homebridge] stdin closed (shim gone); exiting")
 		os.Exit(0)
 	}
-}
-
-func hbSleep(ctx context.Context, d time.Duration) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(d):
-		return true
-	}
-}
-
-func hbNextDelay(d time.Duration) time.Duration {
-	d *= 2
-	if d > hbReconnectMaxDelay {
-		return hbReconnectMaxDelay
-	}
-	return d
 }
