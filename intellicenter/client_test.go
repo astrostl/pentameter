@@ -66,8 +66,9 @@ func (f *fakeIC) objectsFor(condition string) []ObjectData {
 		return []ObjectData{
 			{ObjName: "B1101", Params: map[string]string{"SNAME": "Pool", "STATUS": "ON", "TEMP": "82", "HTMODE": "1", "HTSRC": "H0001", "LOTMP": "85", "HITMP": "104"}},
 		}
-	case "OBJTYP=SENSE":
-		return []ObjectData{{ObjName: "_A135", Params: map[string]string{"SNAME": "Air", "PROBE": "75"}}}
+	case "":
+		// Air sensor is queried by objnam with no condition.
+		return []ObjectData{{ObjName: "_A135", Params: map[string]string{"SNAME": "Air", "PROBE": "75", "SUBTYP": "AIR"}}}
 	}
 	return nil
 }

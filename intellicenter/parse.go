@@ -7,7 +7,7 @@ var (
 	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
 	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyWatts, keyGPM}
 	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp}
-	sensorKeys  = []string{keySName, keyProbe}
+	sensorKeys  = []string{keySName, keyProbe, keySubTyp}
 )
 
 // Per-object parsers: build a typed domain value from a (possibly merged) param
@@ -59,5 +59,11 @@ func heaterFrom(objnam string, params map[string]string) Heater {
 
 func sensorFrom(objnam string, params map[string]string) Sensor {
 	probe := params[keyProbe]
-	return Sensor{ID: objnam, Name: params[keySName], Temp: parseFloat(probe), Valid: probe != ""}
+	return Sensor{
+		ID:      objnam,
+		Name:    params[keySName],
+		SubType: params[keySubTyp],
+		Temp:    parseFloat(probe),
+		Valid:   probe != "",
+	}
 }

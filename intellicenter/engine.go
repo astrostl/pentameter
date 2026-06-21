@@ -3,6 +3,7 @@ package intellicenter
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,6 +83,7 @@ type Engine struct {
 	kind   map[string]Kind
 	params map[string]map[string]string
 	snap   Snapshot
+	config map[string]string // FTR objnam -> SHOMNU (feature visibility), loaded at baseline
 
 	subsMu sync.Mutex
 	subs   []chan Change
@@ -99,6 +101,7 @@ func NewEngine(host, port string, pollEvery time.Duration) *Engine {
 		kind:      map[string]Kind{},
 		params:    map[string]map[string]string{},
 		snap:      newSnapshot(),
+		config:    map[string]string{},
 	}
 }
 
@@ -135,6 +138,44 @@ func (e *Engine) Snapshot() Snapshot {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.snap.clone()
+}
+
+// RawObject is one object's merged raw params plus its inferred kind. Consumers
+// that need the full param set (e.g. metrics interpretation) sweep RawObjects
+// rather than the typed Snapshot.
+type RawObject struct {
+	ObjName string
+	Kind    Kind
+	Params  map[string]string
+}
+
+// RawObjects returns a deep copy of every tracked object's merged raw params.
+// Use it for full-fidelity recomputes that need params not surfaced on the typed
+// Snapshot (e.g. body/circuit SUBTYP, HTSRC, FREEZE).
+func (e *Engine) RawObjects() []RawObject {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]RawObject, 0, len(e.params))
+	for objnam, params := range e.params {
+		cp := make(map[string]string, len(params))
+		for k, v := range params {
+			cp[k] = v
+		}
+		out = append(out, RawObject{ObjName: objnam, Kind: e.kind[objnam], Params: cp})
+	}
+	return out
+}
+
+// Config returns a copy of the loaded feature-visibility config (FTR objnam ->
+// SHOMNU). Empty until the baseline GetConfiguration completes.
+func (e *Engine) Config() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make(map[string]string, len(e.config))
+	for k, v := range e.config {
+		out[k] = v
+	}
+	return out
 }
 
 // --- control (writes) -----------------------------------------------------
@@ -208,6 +249,7 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 	if err := e.scan(req); err != nil {
 		return fmt.Errorf("baseline: %w", err)
 	}
+	e.loadConfig(req) // best-effort: feature visibility, never fatal to a session
 	e.setReqClient(req)
 	e.logf("engine: connected to %s:%s (baseline complete)", e.host, e.port)
 
@@ -284,8 +326,8 @@ func (e *Engine) scan(req *Client) error {
 
 func (e *Engine) querySensor(c *Client, objnam string) (map[string]string, bool) {
 	resp, err := c.roundTrip("sensor", Request{
-		Command:    cmdGetParamList,
-		Condition:  condSense,
+		Command: cmdGetParamList,
+		// No condition: queried by objnam, matching the hardware-proven air-sensor request.
 		ObjectList: []Object{{ObjName: objnam, Keys: sensorKeys}},
 	})
 	if err != nil {
@@ -297,6 +339,46 @@ func (e *Engine) querySensor(c *Client, objnam string) (map[string]string, bool)
 		}
 	}
 	return nil, false
+}
+
+// loadConfig fetches GetConfiguration and records each feature's SHOMNU flag for
+// visibility decisions. Best-effort: failures leave the config empty (consumers
+// then default to showing all features), never aborting the session.
+func (e *Engine) loadConfig(req *Client) {
+	resp, err := req.DoRaw(map[string]any{
+		fieldCommand:   cmdGetQuery,
+		fieldQueryName: queryConfiguration,
+		fieldArguments: "",
+	})
+	if err != nil {
+		e.logf("engine: load config failed: %v", err)
+		return
+	}
+	answer, ok := resp[fieldAnswer].([]any)
+	if !ok {
+		return
+	}
+	cfg := map[string]string{}
+	for _, item := range answer {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		objnam, ok := obj["objnam"].(string)
+		if !ok || !strings.HasPrefix(objnam, ftrPrefix) {
+			continue
+		}
+		params, ok := obj["params"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if shomnu, ok := params[keyShomnu].(string); ok {
+			cfg[objnam] = shomnu
+		}
+	}
+	e.mu.Lock()
+	e.config = cfg
+	e.mu.Unlock()
 }
 
 // handlePush applies an unsolicited push (WriteParamList/NotifyList). Objects not

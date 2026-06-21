@@ -83,8 +83,9 @@ func (c *Client) Heaters() ([]Heater, error) {
 // Sensor reads a single object's temperature PROBE (e.g. air "_A135").
 func (c *Client) Sensor(objnam string) (Sensor, error) {
 	resp, err := c.roundTrip("sensor", Request{
-		Command:    cmdGetParamList,
-		Condition:  condSense,
+		Command: cmdGetParamList,
+		// No condition: the air sensor (_A135) is queried by objnam directly, matching
+		// the hardware-proven request shape from pentameter's getAirTemperature.
 		ObjectList: []Object{{ObjName: objnam, Keys: sensorKeys}},
 	})
 	if err != nil {

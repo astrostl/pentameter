@@ -91,6 +91,30 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	if snap.Bodies["B1101"].Temp != 82 || !snap.Sensors[airSensorObjnam].Valid {
 		t.Fatalf("baseline snapshot incomplete: %+v", snap)
 	}
+	if snap.Sensors[airSensorObjnam].SubType != "AIR" {
+		t.Errorf("sensor subtype not captured: %+v", snap.Sensors[airSensorObjnam])
+	}
+
+	// GetConfiguration ran at baseline → feature visibility loaded.
+	cfg := e.Config()
+	if cfg["FTR01"] != "hide w" || cfg["FTR02"] != "hide" {
+		t.Errorf("config not loaded: %+v", cfg)
+	}
+	if !ShouldShowFeature(cfg["FTR01"]) || ShouldShowFeature(cfg["FTR02"]) {
+		t.Errorf("visibility wrong: FTR01=%v FTR02=%v", cfg["FTR01"], cfg["FTR02"])
+	}
+
+	// RawObjects exposes merged params + kind for full-fidelity sweeps.
+	raw := map[string]RawObject{}
+	for _, o := range e.RawObjects() {
+		raw[o.ObjName] = o
+	}
+	if c := raw["C0001"]; c.Kind != KindCircuit || c.Params["SUBTYP"] != "LIGHT" || c.Params["SNAME"] != "Pool Light" {
+		t.Errorf("raw circuit wrong: %+v", c)
+	}
+	if b := raw["B1101"]; b.Kind != KindBody || b.Params["HTSRC"] != "H0001" || b.Params["LOTMP"] != "85" {
+		t.Errorf("raw body wrong: %+v", b)
+	}
 
 	// Control: a write reaches IntelliCenter as a SetParamList.
 	if err := e.SetCircuit("C0001", false); err != nil {
@@ -223,6 +247,16 @@ func (m *engineMock) handle(sc *safeConn, req Request) {
 		m.lastReq = req
 		m.mu.Unlock()
 		sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "200"})
+	case cmdGetQuery:
+		// GetConfiguration → "answer" envelope with FTR SHOMNU visibility flags.
+		sc.writeJSON(map[string]any{
+			"command":   req.Command,
+			"messageID": req.MessageID,
+			"answer": []any{
+				map[string]any{"objnam": "FTR01", "params": map[string]any{"SHOMNU": "hide w"}},
+				map[string]any{"objnam": "FTR02", "params": map[string]any{"SHOMNU": "hide"}},
+			},
+		})
 	default:
 		sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "400"})
 	}
@@ -238,11 +272,14 @@ func (m *engineMock) objectsFor(req Request) []ObjectData {
 		return []ObjectData{{ObjName: "B1101", Params: map[string]string{
 			"SNAME": "Pool", "STATUS": "ON", "TEMP": "82", "SUBTYP": "POOL", "HTMODE": "1", "HTSRC": "H0001", "LOTMP": "85", "HITMP": "104",
 		}}}
-	case condSense:
-		return []ObjectData{{ObjName: airSensorObjnam, Params: map[string]string{"SNAME": "Air", "PROBE": "75"}}}
-	default: // pumps, heaters: none in this fixture
-		return nil
 	}
+	// Air sensor is queried by objnam with no condition.
+	if len(req.ObjectList) == 1 && req.ObjectList[0].ObjName == airSensorObjnam {
+		return []ObjectData{{ObjName: airSensorObjnam, Params: map[string]string{
+			"SNAME": "Air", "PROBE": "75", "SUBTYP": "AIR",
+		}}}
+	}
+	return nil // pumps, heaters: none in this fixture
 }
 
 func (m *engineMock) broadcast(push any) {

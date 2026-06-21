@@ -109,10 +109,11 @@ type Heater struct {
 
 // Sensor is a temperature sensor reading (e.g. air _A135).
 type Sensor struct {
-	ID    string
-	Name  string  // SNAME
-	Temp  float64 // PROBE
-	Valid bool
+	ID      string
+	Name    string  // SNAME
+	SubType string  // SUBTYP (used as a metric label)
+	Temp    float64 // PROBE
+	Valid   bool
 }
 
 // Heat/thermal status values (match pentameter's metric encoding).
@@ -134,6 +135,18 @@ const (
 const (
 	cmdGetParamList = "GetParamList"
 	cmdSetParamList = "SetParamList"
+	cmdGetQuery     = "GetQuery"
+
+	// GetConfiguration query (feature visibility via SHOMNU).
+	queryConfiguration = "GetConfiguration"
+	keyShomnu          = "SHOMNU"
+	ftrPrefix          = "FTR"
+
+	// Raw-request field names (DoRaw map keys / GetQuery envelope).
+	fieldCommand   = "command"
+	fieldQueryName = "queryName"
+	fieldArguments = "arguments"
+	fieldAnswer    = "answer"
 
 	keyStatus = "STATUS"
 	keyLoTmp  = "LOTMP"
@@ -154,7 +167,6 @@ const (
 	condBody    = "OBJTYP=BODY"
 	condPump    = "OBJTYP=PUMP"
 	condHeater  = "OBJTYP=HEATER"
-	condSense   = "OBJTYP=SENSE"
 
 	valueOff = "OFF"
 )
