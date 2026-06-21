@@ -3,7 +3,7 @@ package intellicenter
 // Key sets requested per object type, shared by the Client query methods and the
 // Engine's baseline/poll so the wire requests stay identical.
 var (
-	circuitKeys = []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze}
+	circuitKeys = []string{keySName, keyStatus, keyObjTyp, keySubTyp, keyFreeze, keyFeatr}
 	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
 	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyWatts, keyGPM}
 	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp, keyBody, keyCool}
@@ -21,6 +21,7 @@ func circuitFrom(objnam string, params map[string]string) Circuit {
 		SubType: params[keySubTyp],
 		On:      params[keyStatus] == statusOn,
 		Freeze:  params[keyFreeze] == statusOn,
+		Feature: params[keyFeatr] == statusOn,
 	}
 }
 

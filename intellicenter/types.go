@@ -75,6 +75,7 @@ type Circuit struct {
 	SubType string // SUBTYP
 	On      bool   // STATUS == "ON"
 	Freeze  bool   // FREEZE == "ON"
+	Feature bool   // FEATR == "ON" (flagged as a Feature in IntelliCenter)
 }
 
 // Body is a pool/spa body (objnam B####).
@@ -158,6 +159,7 @@ const (
 	keyLoTmp  = "LOTMP"
 	keyHiTmp  = "HITMP"
 	keyFreeze = "FREEZE"
+	keyFeatr  = "FEATR"
 	keyProbe  = "PROBE"
 	keySName  = "SNAME"
 	keyObjTyp = "OBJTYP"

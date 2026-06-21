@@ -35,15 +35,16 @@ func (b *syncBuffer) String() string {
 // carries name/kind/on.
 func TestHBCircuitItems(t *testing.T) {
 	snap := intellicenter.Snapshot{Circuits: map[string]intellicenter.Circuit{
-		"C0002": {ID: "C0002", Name: "Cleaner", On: false},
-		"C0001": {ID: "C0001", Name: "Pool Light", On: true},
+		"C0002": {ID: "C0002", Name: "Cleaner", On: false, Feature: true},
+		"C0001": {ID: "C0001", Name: "Pool Light", On: true, Feature: true},
+		"C0003": {ID: "C0003", Name: "Internal Relay", On: true, Feature: false}, // not a Feature → hidden
 	}}
 	items := hbCircuitItems(snap)
 	if len(items) != 2 {
-		t.Fatalf("want 2 items, got %d", len(items))
+		t.Fatalf("want 2 items (Features only), got %d", len(items))
 	}
 	if items[0].ID != "C0001" || items[1].ID != "C0002" {
-		t.Errorf("items not sorted by ID: %+v", items)
+		t.Errorf("items not sorted by ID or non-Feature leaked in: %+v", items)
 	}
 	if items[0].Kind != "switch" || items[0].Name != "Pool Light" || !items[0].On {
 		t.Errorf("first item wrong: %+v", items[0])
@@ -148,8 +149,8 @@ func TestCToF(t *testing.T) {
 func TestHomebridgeEngineAnnounces(t *testing.T) {
 	responses := map[string]IntelliCenterResponse{
 		"GetParamList:OBJTYP=CIRCUIT": {ObjectList: []ObjectData{
-			{ObjName: "C0001", Params: map[string]string{"SNAME": "Pool Light", "STATUS": "ON", "OBJTYP": "CIRCUIT", "SUBTYP": "LIGHT"}},
-			{ObjName: "C0002", Params: map[string]string{"SNAME": "Cleaner", "STATUS": "OFF", "OBJTYP": "CIRCUIT", "SUBTYP": "GENERIC"}},
+			{ObjName: "C0001", Params: map[string]string{"SNAME": "Pool Light", "STATUS": "ON", "OBJTYP": "CIRCUIT", "SUBTYP": "LIGHT", "FEATR": "ON"}},
+			{ObjName: "C0002", Params: map[string]string{"SNAME": "Cleaner", "STATUS": "OFF", "OBJTYP": "CIRCUIT", "SUBTYP": "GENERIC", "FEATR": "ON"}},
 		}},
 	}
 	server := createMockWebSocketServer(t, responses)

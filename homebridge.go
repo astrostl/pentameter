@@ -263,6 +263,9 @@ func hbCircuitItems(snap intellicenter.Snapshot) []hbAccessory {
 	items := make([]hbAccessory, 0, len(ids))
 	for _, id := range ids {
 		c := snap.Circuits[id]
+		if !c.Feature { // only circuits flagged as Features in IntelliCenter
+			continue
+		}
 		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: hbKindSwitch, On: c.On})
 	}
 	return items
