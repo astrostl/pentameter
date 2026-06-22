@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-06-22
+## [0.5.2] - 2026-06-21
+
+### Changed
+- **`--help` output clarified and made consistent** - All three modes now read "Run as a/the …"; `--metrics` is described as the default when no function or other mode is given; `env:` notes are formatted uniformly; mDNS is named on `--discover` and `--ic-ip` (where it applies) instead of called out inconsistently.
+- **Skipped-feature notices are quieter** - "Show as Feature: NO" skip messages now log only in `--listen` (troubleshooting) mode, once per feature. Metrics and homebridge runs no longer print them.
+
+### Fixed
+- **Metrics server binds before it announces itself** - The Prometheus listener is now bound synchronously, so the sidecar never logs or advertises a `/metrics` endpoint that failed to bind. Metrics mode still treats a bind failure as fatal; homebridge mode logs it and keeps HomeKit running.
+
+## [0.5.1] - 2026-06-21
 
 ### Fixed
 - **Homebridge mode: metrics server bind is non-fatal** - If the Prometheus port (default 8080) is already in use, metrics are skipped and HomeKit keeps running, instead of the sidecar crash-looping. Metrics mode still treats a bind failure as fatal (serving metrics is its only job).

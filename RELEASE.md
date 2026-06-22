@@ -30,6 +30,7 @@ Before starting the release process, ensure:
 
 3. **Documentation is Updated**
    - Update `CHANGELOG.md` with new version section and all changes
+   - **Date the entry with the actual local date** - get it from `date "+%Y-%m-%d"` on the release machine; never guess, never use a UTC/"next day" date, never post-date. The changelog date must equal the day the tag is actually created in local time. (A late-evening commit whose UTC timestamp rolls to the next day still gets the *local* date.)
    - Update `README.md` if new features require documentation
    - Update `CLAUDE.md` if process documentation needs changes
    - Commit and push documentation updates BEFORE creating the release tag
