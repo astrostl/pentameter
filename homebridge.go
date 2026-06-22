@@ -212,7 +212,7 @@ func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 		}
 	}()
 
-	go setupHTTPEndpoints(registry, met.pm, port) // blocks in its own goroutine
+	go setupHTTPEndpoints(registry, met.pm, port, false) // non-fatal: metrics is secondary to HomeKit
 
 	// Advertise the metrics endpoint over mDNS, matching standalone metrics mode.
 	// (Note: ineffective from inside bridge-networked Docker — same limitation

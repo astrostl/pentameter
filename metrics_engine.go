@@ -77,7 +77,7 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 		}()
 	}
 
-	setupHTTPEndpoints(registry, pm, cfg.httpPort)
+	setupHTTPEndpoints(registry, pm, cfg.httpPort, true)
 }
 
 // refreshFromEngine recomputes every metric from the engine's current raw snapshot,

@@ -1504,7 +1504,11 @@ func createPrometheusRegistry() *prometheus.Registry {
 	return registry
 }
 
-func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) {
+// setupHTTPEndpoints binds the Prometheus /metrics + /health server. When fatal
+// is true (metrics mode, where serving metrics is the whole job) a bind failure
+// exits the process; when false (homebridge mode) it is logged and ignored, so a
+// port conflict on the secondary metrics endpoint never takes down HomeKit.
+func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string, fatal bool) {
 	http.Handle("/metrics", createMetricsHandler(registry, monitor))
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1516,7 +1520,12 @@ func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, htt
 	serverAddr := ":" + httpPort
 	log.Printf("Starting Prometheus metrics server on %s", serverAddr)
 	log.Printf("Metrics available at http://localhost:%s/metrics", httpPort)
-	startServer(serverAddr)
+	if err := startServer(serverAddr); err != nil {
+		if fatal {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+		log.Printf("metrics server disabled: %v (HomeKit unaffected)", err)
+	}
 }
 
 func main() {
@@ -1541,7 +1550,7 @@ func main() {
 	}
 }
 
-func startServer(serverAddr string) {
+func startServer(serverAddr string) error {
 	server := &http.Server{
 		Addr:         serverAddr,
 		Handler:      nil,
@@ -1550,7 +1559,5 @@ func startServer(serverAddr string) {
 		IdleTimeout:  httpIdleTimeout,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("HTTP server failed: %v", err)
-	}
+	return server.ListenAndServe()
 }
