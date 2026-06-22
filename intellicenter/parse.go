@@ -7,7 +7,7 @@ var (
 	bodyKeys    = []string{keySName, keyStatus, keyTemp, keySubTyp, keyHTMode, keyHTSrc, keyLoTmp, keyHiTmp}
 	pumpKeys    = []string{keySName, keyStatus, keyRPM, keyMax, keyPwr, keyWatts, keyGPM, keyMaxF}
 	heaterKeys  = []string{keySName, keyStatus, keySubTyp, keyObjTyp, keyBody, keyCool}
-	sensorKeys  = []string{keySName, keyProbe, keySubTyp}
+	sensorKeys  = []string{keySName, keyProbe, keySubTyp, keyStatus}
 )
 
 // Per-object parsers: build a typed domain value from a (possibly merged) param

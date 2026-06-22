@@ -466,22 +466,45 @@ func TestGetEnvOrDefaultWithExistingVar(t *testing.T) {
 	}
 }
 
-func TestStartServer(t *testing.T) {
-	// Test coverage for startServer function existence
-	// We can't easily test startServer directly since it calls log.Fatalf which would exit
-	// and ListenAndServe blocks, so we just verify the function exists and can be called
-	// indirectly through testing that main.go compiles and has the expected structure
-
-	// This test mainly exists for coverage - the actual server startup is tested
-	// in integration scenarios
+func TestMetricsServerBindAndServe(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping server test in short mode")
 	}
 
-	// Test that the function signature exists by checking we can reference it
-	// without actually calling it (since it would block or exit)
-	serverFunc := startServer
-	_ = serverFunc // Acknowledge we're testing existence, not calling
+	registry := createPrometheusRegistry()
+	monitor := NewPoolMonitor("", "", false)
+
+	// Port "0" lets the OS pick a free port, so the test never collides with a
+	// real metrics server or another test.
+	ln, err := bindMetricsServer(registry, monitor, "0")
+	if err != nil {
+		t.Fatalf("bindMetricsServer should succeed on a free port: %v", err)
+	}
+	if ln == nil {
+		t.Fatal("bindMetricsServer returned a nil listener with no error")
+	}
+
+	served := make(chan error, 1)
+	go func() { served <- serveMetrics(ln) }()
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/health")
+	if err != nil {
+		t.Fatalf("GET /health failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /health = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Errorf("closing response body: %v", err)
+	}
+
+	// A graceful close must fold http.ErrServerClosed into a nil return.
+	if err := ln.Close(); err != nil {
+		t.Errorf("closing listener: %v", err)
+	}
+	if err := <-served; err != nil {
+		t.Errorf("serveMetrics returned %v after a graceful close, want nil", err)
+	}
 }
 
 func testAPIError(t *testing.T, condition, responseCode string, testFunc func(*PoolMonitor) error) {

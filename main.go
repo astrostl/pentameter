@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -679,17 +681,19 @@ func (pm *PoolMonitor) processFeatureObject(obj ObjectData, name, status, subtyp
 	pm.logSkippedFeature(name, obj.ObjName, shomnu)
 }
 
+// logSkippedFeature is a troubleshooting breadcrumb for "why isn't my feature in
+// HomeKit?" — the feature is hidden because IntelliCenter has "Show as Feature:
+// NO" set for it. That's the user's deliberate choice, not an event, so it only
+// fires in -listen mode (the troubleshooting mode), and once per feature there.
+// Normal homebridge/metrics runs stay quiet.
 func (pm *PoolMonitor) logSkippedFeature(name, objName, shomnu string) {
-	// Only log skipped features once in listen mode
-	if pm.listenMode && pm.previousState != nil {
-		if !pm.previousState.SkippedFeatures[objName] {
-			log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
-			pm.previousState.SkippedFeatures[objName] = true
-		}
+	if !pm.listenMode || pm.previousState == nil {
 		return
 	}
-
-	pm.logChangedf("skip:"+objName, "Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
+	if !pm.previousState.SkippedFeatures[objName] {
+		log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
+		pm.previousState.SkippedFeatures[objName] = true
+	}
 }
 
 func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subtype string, freezeEnabled bool) {
@@ -1312,7 +1316,7 @@ func defineFlags() *commandLineFlags {
 		// --metrics names the default mode explicitly; running with no mode flag
 		// also selects it. Its value is only used to enforce mode exclusivity.
 		metrics: flag.Bool("metrics", getEnvOrDefault("PENTAMETER_METRICS", "false") == trueString,
-			"Run as the Prometheus metrics exporter (the default mode; env: PENTAMETER_METRICS)"),
+			"Run as the Prometheus metrics exporter — the default if no function or other mode is given (env: PENTAMETER_METRICS)"),
 		intelliCenterIP: flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
 			"IntelliCenter IP address (env: PENTAMETER_IC_IP) (default mDNS auto-discovery)"),
 		intelliCenterPort: flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"),
@@ -1320,13 +1324,13 @@ func defineFlags() *commandLineFlags {
 		httpPort: flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"),
 			"HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)"),
 		listenMode: flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
-			"Enable live event logging mode with raw JSON output (env: PENTAMETER_LISTEN)"),
+			"Run as a live event logger with raw JSON output (env: PENTAMETER_LISTEN)"),
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
-			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
+			"Run as a Homebridge sidecar — stdio JSON IPC (env: PENTAMETER_HOMEBRIDGE)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0),
 			"Polling interval in seconds (env: PENTAMETER_INTERVAL) (default 60, or 10 in listen mode)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
-		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
+		discoverOnly: flag.Bool("discover", false, "Discover the IntelliCenter IP address via mDNS and exit"),
 	}
 }
 
@@ -1518,11 +1522,13 @@ func createPrometheusRegistry() *prometheus.Registry {
 	return registry
 }
 
-// setupHTTPEndpoints binds the Prometheus /metrics + /health server. When fatal
-// is true (metrics mode, where serving metrics is the whole job) a bind failure
-// exits the process; when false (homebridge mode) it is logged and ignored, so a
-// port conflict on the secondary metrics endpoint never takes down HomeKit.
-func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string, fatal bool) {
+// bindMetricsServer registers the Prometheus /metrics + /health handlers and
+// binds the listener synchronously, so the caller learns immediately — before
+// logging or advertising the endpoint — whether the bind succeeded. metrics mode
+// treats a bind failure as fatal (serving metrics is the whole job); homebridge
+// mode logs it and carries on, so a port conflict on the secondary metrics
+// endpoint never takes down HomeKit.
+func bindMetricsServer(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) (net.Listener, error) {
 	http.Handle("/metrics", createMetricsHandler(registry, monitor))
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1531,15 +1537,7 @@ func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, htt
 		}
 	})
 
-	serverAddr := ":" + httpPort
-	log.Printf("Starting Prometheus metrics server on %s", serverAddr)
-	log.Printf("Metrics available at http://localhost:%s/metrics", httpPort)
-	if err := startServer(serverAddr); err != nil {
-		if fatal {
-			log.Fatalf("HTTP server failed: %v", err)
-		}
-		log.Printf("metrics server disabled: %v (HomeKit unaffected)", err)
-	}
+	return net.Listen("tcp", ":"+httpPort)
 }
 
 func main() {
@@ -1564,14 +1562,22 @@ func main() {
 	}
 }
 
-func startServer(serverAddr string) error {
+// serveMetrics serves on an already-bound listener (from bindMetricsServer) and
+// blocks until the server stops. http.ErrServerClosed (graceful shutdown) is
+// folded into a nil return.
+func serveMetrics(ln net.Listener) error {
 	server := &http.Server{
-		Addr:         serverAddr,
 		Handler:      nil,
 		ReadTimeout:  httpReadTimeout,
 		WriteTimeout: httpWriteTimeout,
 		IdleTimeout:  httpIdleTimeout,
 	}
 
-	return server.ListenAndServe()
+	// Serve returns ErrServerClosed on Server.Close/Shutdown and net.ErrClosed
+	// when the listener itself is closed; both are graceful stops, not failures.
+	if err := server.Serve(ln); err != nil &&
+		!errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }

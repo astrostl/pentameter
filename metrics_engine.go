@@ -77,7 +77,15 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 		}()
 	}
 
-	setupHTTPEndpoints(registry, pm, cfg.httpPort, true)
+	ln, err := bindMetricsServer(registry, pm, cfg.httpPort)
+	if err != nil {
+		log.Fatalf("HTTP server failed: %v", err)
+	}
+	log.Printf("Starting Prometheus metrics server on :%s", cfg.httpPort)
+	log.Printf("Metrics available at http://localhost:%s/metrics", cfg.httpPort)
+	if err := serveMetrics(ln); err != nil {
+		log.Fatalf("HTTP server failed: %v", err)
+	}
 }
 
 // refreshFromEngine recomputes every metric from the engine's current raw snapshot,

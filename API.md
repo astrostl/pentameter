@@ -266,7 +266,7 @@ The `GetParamList` command retrieves current operational data for monitoring.
   "messageID": "all-sensors-001",
   "command": "GetParamList", 
   "condition": "OBJTYP=SENSE",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "PROBE", "SUBTYP"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "PROBE", "SUBTYP", "STATUS"]}]
 }
 ```
 
@@ -393,6 +393,7 @@ Example (PMP01 / VS pump):
 - **SNAME**: Display name
 - **PROBE**: Temperature reading (°F)
 - **SUBTYP**: Sensor type (AIR, POOL, SOLAR)
+- **STATUS**: Sensor health (`OK` when reporting normally; not the temperature)
 
 **Circuit Groups (OBJTYP=CIRCGRP):**
 - **PARENT**: Parent group ID (e.g., "GRP01")
@@ -1223,7 +1224,7 @@ To determine if freeze protection is **currently active** (circuits running due 
   "messageID": "air-temp-001",
   "command": "GetParamList",
   "condition": "OBJTYP=SENSE",
-  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "PROBE", "SUBTYP"]}]
+  "objectList": [{"objnam": "INCR", "keys": ["SNAME", "PROBE", "SUBTYP", "STATUS"]}]
 }
 ```
 

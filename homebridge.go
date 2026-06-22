@@ -214,7 +214,19 @@ func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 		}
 	}()
 
-	go setupHTTPEndpoints(registry, met.pm, port, false) // non-fatal: metrics is secondary to HomeKit
+	// Bind synchronously: metrics is secondary to HomeKit, so a port conflict is
+	// logged and ignored rather than fatal. Binding before we advertise/log means
+	// we never claim to be "serving" an endpoint that failed to bind.
+	ln, err := bindMetricsServer(registry, met.pm, port)
+	if err != nil {
+		log.Printf("[homebridge] metrics server disabled: %v (HomeKit unaffected)", err)
+		return met
+	}
+	go func() {
+		if serr := serveMetrics(ln); serr != nil {
+			log.Printf("[homebridge] metrics server stopped: %v", serr)
+		}
+	}()
 
 	// Advertise the metrics endpoint over mDNS, matching standalone metrics mode.
 	// (Note: ineffective from inside bridge-networked Docker — same limitation
