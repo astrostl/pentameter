@@ -55,6 +55,9 @@ const (
 	// Boolean string constants.
 	trueString = "true"
 
+	// Exit code for a command-line usage error (matches the flag package).
+	exitUsageError = 2
+
 	// Object type constants.
 	objTypeBody    = "BODY"
 	objTypeCircuit = "CIRCUIT"
@@ -1282,6 +1285,7 @@ type commandLineFlags struct {
 	intelliCenterIP   *string
 	intelliCenterPort *string
 	httpPort          *string
+	metrics           *bool
 	listenMode        *bool
 	homebridge        *bool
 	pollInterval      *int
@@ -1290,12 +1294,11 @@ type commandLineFlags struct {
 }
 
 func defineFlags() *commandLineFlags {
-	// --metrics is the default mode, so its value isn't read — running with no
-	// mode flag already means metrics. It's registered for explicitness and so it
-	// shows up in --help alongside the other modes.
-	_ = flag.Bool("metrics", getEnvOrDefault("PENTAMETER_METRICS", "false") == trueString,
-		"Run as the Prometheus metrics exporter (the default mode; env: PENTAMETER_METRICS)")
 	return &commandLineFlags{
+		// --metrics names the default mode explicitly; running with no mode flag
+		// also selects it. Its value is only used to enforce mode exclusivity.
+		metrics: flag.Bool("metrics", getEnvOrDefault("PENTAMETER_METRICS", "false") == trueString,
+			"Run as the Prometheus metrics exporter (the default mode; env: PENTAMETER_METRICS)"),
 		intelliCenterIP: flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
 			"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)"),
 		intelliCenterPort: flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"),
@@ -1393,7 +1396,7 @@ func doubleDashUsage() {
 		names []string
 	}{
 		{"Functions (run once and exit)", []string{"discover", "version"}},
-		{"Modes (pick one; metrics is the default)", []string{"metrics", "homebridge", "listen"}},
+		{"Modes", []string{"metrics", "homebridge", "listen"}},
 		{"Configuration", []string{"ic-ip", "ic-port", "http-port", "interval"}},
 	}
 	for _, grp := range groups {
@@ -1428,12 +1431,29 @@ func isZeroFlagValue(v string) bool {
 	return v == "" || v == "false" || v == "0"
 }
 
+// validateModeFlags enforces that at most one run mode is selected. metrics,
+// homebridge, and listen are mutually exclusive; 2+ is a usage error.
+func validateModeFlags(flags *commandLineFlags) {
+	selected := 0
+	for _, on := range []bool{*flags.metrics, *flags.homebridge, *flags.listenMode} {
+		if on {
+			selected++
+		}
+	}
+	if selected > 1 {
+		fmt.Fprintln(flag.CommandLine.Output(),
+			"error: --metrics, --homebridge, and --listen are mutually exclusive; pick at most one")
+		os.Exit(exitUsageError)
+	}
+}
+
 func parseCommandLineFlags() *appConfig {
 	flags := defineFlags()
 	flag.Usage = doubleDashUsage
 	flag.Parse()
 
 	handleEarlyExitFlags(flags)
+	validateModeFlags(flags)
 
 	cfg := &appConfig{
 		intelliCenterIP:   *flags.intelliCenterIP,
