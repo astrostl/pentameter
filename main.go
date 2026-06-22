@@ -1310,7 +1310,7 @@ func defineFlags() *commandLineFlags {
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
 			"Run as a Homebridge sidecar (stdio JSON IPC; auto-discovers if no IP; env: PENTAMETER_HOMEBRIDGE)"),
 		pollInterval: flag.Int("interval", getEnvIntOrDefault("PENTAMETER_INTERVAL", 0),
-			"Polling interval in seconds (default 60; 10 in listen mode; minimum 5; env: PENTAMETER_INTERVAL)"),
+			"Polling interval in seconds (env: PENTAMETER_INTERVAL) (default 60, or 10 in listen mode; minimum 5)"),
 		showVersion:  flag.Bool("version", false, "Show version information"),
 		discoverOnly: flag.Bool("discover", false, "Discover IntelliCenter IP address and exit"),
 	}
