@@ -1,7 +1,7 @@
 package main
 
 // Homebridge mode: pentameter as the sidecar for the
-// homebridge-pentair-intellicenter-ai-ng plugin. It speaks a tiny
+// homebridge-pentair-intellicenter-ai plugin. It speaks a tiny
 // newline-delimited JSON protocol to the Node shim over stdio:
 //
 //	stdout (sidecar -> shim):  {"t":"ready"}

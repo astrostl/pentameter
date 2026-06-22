@@ -362,7 +362,7 @@ Listen mode monitors all equipment types:
 ## Homebridge Mode - Apple HomeKit Integration
 
 Homebridge mode (`--homebridge`) runs pentameter as a sidecar for the companion
-`homebridge-pentair-intellicenter-ai-ng` Homebridge plugin, exposing your IntelliCenter
+`homebridge-pentair-intellicenter-ai` Homebridge plugin, exposing your IntelliCenter
 equipment to Apple HomeKit. The sidecar speaks a small
 newline-delimited JSON protocol to the Node plugin over stdio, so it is normally spawned by
 Homebridge rather than run by hand. The Prometheus `/metrics` endpoint continues to be served
