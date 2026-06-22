@@ -243,7 +243,7 @@ All configuration options can be set via command line flags or environment varia
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
 | `--interval` | `PENTAMETER_INTERVAL` | `60` (10 in listen mode) | Polling interval in seconds |
-| `--metrics` | `PENTAMETER_METRICS` | `true` | Run as the Prometheus metrics exporter (the default mode) |
+| `--metrics` | `PENTAMETER_METRICS` | (default mode) | Run as the Prometheus metrics exporter; used when no other mode is selected |
 | `--listen` | `PENTAMETER_LISTEN` | `false` | Enable live event monitoring mode |
 | `--homebridge` | `PENTAMETER_HOMEBRIDGE` | `false` | Run as a Homebridge sidecar (stdio JSON IPC) |
 | `--discover` | N/A | N/A | Discover IntelliCenter IP address and exit |
