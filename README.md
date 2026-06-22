@@ -373,6 +373,8 @@ in this mode, so a single process can drive both HomeKit and Grafana.
 
 - **Thermostats** - One per body (pool/spa) with setpoint and on/off control
 - **Switches** - Feature circuits flagged as Features (`FEATR=ON`) in IntelliCenter
+- **Lightbulbs** - Feature circuits whose `SUBTYP` is a light type (on/off; correct
+  HomeKit icon, and they skip Apple Home's per-Switch "Display As" prompt)
 - **Light sensors** - Per-pump metrics (RPM, watts, GPM) encoded as lux for graphing in Home
 - **Occupancy sensors** - Per-pump "running" state, freeze-protection state, and a
   "Pool Controller Online" connection-health sensor that flips when the controller link drops

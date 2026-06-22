@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-22
+
+### Fixed
+- **Homebridge mode: metrics server bind is non-fatal** - If the Prometheus port (default 8080) is already in use, metrics are skipped and HomeKit keeps running, instead of the sidecar crash-looping. Metrics mode still treats a bind failure as fatal (serving metrics is its only job).
+
+### Changed
+- **Equipment state is logged only on change** - `Updated …` lines (temperature, circuit/feature/thermal status, pump RPM, freeze protection, skipped features) now print only when a value actually changes, instead of dumping the full device state on every poll. Applies to metrics and homebridge modes. Console logging only - Prometheus gauges are still set every poll, so `/metrics` and Grafana are unaffected.
+- **Homebridge mode: light circuits exposed as Lightbulb** - Feature circuits whose IntelliCenter `SUBTYP` is a light type are now exposed as HomeKit Lightbulbs (correct icon; skips Apple Home's per-Switch "Display As" prompt) instead of generic Switches. On/off only; color is future work.
+
 ## [0.5.0] - 2026-06-21
 
 ### Added
