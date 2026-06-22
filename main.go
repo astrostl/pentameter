@@ -688,7 +688,7 @@ func (pm *PoolMonitor) logSkippedFeature(name, objName, shomnu string) {
 		return
 	}
 
-	if !pm.listenMode {
+	if !pm.listenMode && !pm.quiet {
 		log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
 	}
 }

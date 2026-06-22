@@ -37,6 +37,7 @@ const (
 	hbStdinMaxBuf  = 1024 * 1024 // max stdin line length
 
 	hbKindSwitch     = "switch"      // HomeKit accessory kind for a circuit
+	hbKindLightbulb  = "lightbulb"   // HomeKit Lightbulb for a light circuit (on/off; color TBD)
 	hbKindThermostat = "thermostat"  // HomeKit accessory kind for a body+heater
 	hbKindLight      = "lightsensor" // read-only LightSensor: a raw metric encoded as lux
 	hbKindOccupancy  = "occupancy"   // read-only OccupancySensor: a boolean system state
@@ -196,6 +197,11 @@ type hbMetrics struct {
 // recompute. It returns a handle whose onScan does the full poll-cadence refresh.
 func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 	met := &hbMetrics{pm: NewPoolMonitor("", "", false)}
+	// Suppress the per-object "Updated ..." / "Skipping feature" logs: in
+	// homebridge mode recompute runs every poll (and every push), so those would
+	// spam the Homebridge log with the full device state on a 30s cadence even
+	// when nothing changed. The shim emits its own meaningful change logs.
+	met.pm.quiet = true
 	registry := createPrometheusRegistry()
 
 	// Push-driven freshness: recompute (quietly) on every change between polls.
@@ -646,9 +652,26 @@ func hbCircuitItems(snap intellicenter.Snapshot) []hbAccessory {
 		if !c.Feature { // only circuits flagged as Features in IntelliCenter
 			continue
 		}
-		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: hbKindSwitch, On: c.On})
+		kind := hbKindSwitch
+		if isLightSubType(c.SubType) {
+			kind = hbKindLightbulb
+		}
+		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: kind, On: c.On})
 	}
 	return items
+}
+
+// isLightSubType reports whether a circuit's SUBTYP marks it as a light, so it
+// can be a HomeKit Lightbulb instead of a generic Switch (correct icon, and it
+// skips Apple Home's "Display As" prompt that every Switch triggers). Covers the
+// plain relay light plus the known IntelliCenter color-light subtypes; control
+// here is still on/off (color is future work). POOL/SPA/GENERIC are NOT lights.
+func isLightSubType(subtype string) bool {
+	switch strings.ToUpper(strings.TrimSpace(subtype)) {
+	case "LIGHT", "INTELLI", "GLOW", "GLOWT", "MAGIC2", "DIMMER", "LITSHO", "COLOR", "CLRCASC":
+		return true
+	}
+	return false
 }
 
 // hbThermostatItems builds one Thermostat per body that has a real (configured,
