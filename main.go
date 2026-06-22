@@ -1431,18 +1431,24 @@ func isZeroFlagValue(v string) bool {
 	return v == "" || v == "false" || v == "0"
 }
 
-// validateModeFlags enforces that at most one run mode is selected. metrics,
-// homebridge, and listen are mutually exclusive; 2+ is a usage error.
-func validateModeFlags(flags *commandLineFlags) {
+// validateExclusiveFlags enforces that at most one function or mode is selected.
+// The functions (--version, --discover) and modes (--metrics, --homebridge,
+// --listen) are all mutually exclusive — with each other and across categories.
+func validateExclusiveFlags(flags *commandLineFlags) {
+	exclusive := []bool{
+		*flags.showVersion, *flags.discoverOnly,
+		*flags.metrics, *flags.homebridge, *flags.listenMode,
+	}
 	selected := 0
-	for _, on := range []bool{*flags.metrics, *flags.homebridge, *flags.listenMode} {
+	for _, on := range exclusive {
 		if on {
 			selected++
 		}
 	}
 	if selected > 1 {
 		fmt.Fprintln(flag.CommandLine.Output(),
-			"error: --metrics, --homebridge, and --listen are mutually exclusive; pick at most one")
+			"error: --version, --discover, --metrics, --homebridge, and --listen "+
+				"are mutually exclusive; pick at most one")
 		os.Exit(exitUsageError)
 	}
 }
@@ -1452,8 +1458,8 @@ func parseCommandLineFlags() *appConfig {
 	flag.Usage = doubleDashUsage
 	flag.Parse()
 
+	validateExclusiveFlags(flags)
 	handleEarlyExitFlags(flags)
-	validateModeFlags(flags)
 
 	cfg := &appConfig{
 		intelliCenterIP:   *flags.intelliCenterIP,
