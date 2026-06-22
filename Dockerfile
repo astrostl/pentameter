@@ -7,8 +7,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Copy source code (root package + intellicenter subpackage; *_test.go excluded via .dockerignore)
 COPY *.go ./
+COPY intellicenter/ ./intellicenter/
 
 # Build static binary
 # Note: VERSION is passed as build arg during release builds

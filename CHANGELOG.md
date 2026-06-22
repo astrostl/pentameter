@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-21
+
+### Added
+- **Homebridge mode (`--homebridge`)** - Exposes IntelliCenter equipment to Apple HomeKit as a Homebridge sidecar, while still serving Prometheus `/metrics`
+  - **Per-body Thermostat accessories** with setpoint and on/off control (display + control)
+  - **Feature circuits** - Only circuits flagged as Features (`FEATR=ON`) are exposed
+  - **Pumps** - Exposed as LightSensors (per-pump metrics) plus a "running" OccupancySensor
+  - **Freeze protection** - OccupancySensor reflecting freeze-protection state
+  - **Air temperature** - Exposed as a TemperatureSensor
+  - **Controller-connection health** - OccupancySensor that flips offline when the IntelliCenter session drops
+  - **Self-healing** - Accessory set reconciles on each poll cycle (no restart needed when equipment changes)
+- **`intellicenter` package** - New real-time Engine (state cache, event bus, hybrid push + poll) shared across metrics, listen, and homebridge modes
+- **Explicit `--metrics` mode flag** - The default mode is now selectable explicitly
+- **`/metrics` served in all modes** - A single port flag now exposes Prometheus metrics by default regardless of mode (including homebridge)
+- **mDNS advertises the `/metrics` endpoint**
+
+### Changed
+- **Engine is now the default backend** for metrics and listen modes (the experimental `-engine` opt-in flag was removed)
+- **Functions and modes are mutually exclusive** - Clearer, validated flag combinations
+- **Flags displayed in `--flag` form** - Both `-flag` and `--flag` remain accepted
+- **`--help` grouped** into Functions / Modes / Configuration sections
+- **Pump power read from `PWR`** instead of `WATTS`
+- Help-text wording fixes for `--interval` and `--ic-ip`
+- Upgraded golangci-lint to v2 and made the codebase lint-clean
+
+### Removed
+- **Legacy `PoolMonitor` orchestration** - Replaced by the `intellicenter` Engine (tests migrated)
+
+### Fixed
+- **Thermostat setpoint feedback loop** in homebridge mode
+- **Heater writes use `HEATER`** (not `HTSRC`) with verify/reconcile after write
+
 ## [0.4.7] - 2026-03-22
 
 ### Fixed

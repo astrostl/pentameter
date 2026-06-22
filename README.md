@@ -242,10 +242,14 @@ All configuration options can be set via command line flags or environment varia
 | `--ic-ip` | `PENTAMETER_IC_IP` | (auto-discover) | IntelliCenter IP address (optional, auto-discovers via mDNS if not provided) |
 | `--ic-port` | `PENTAMETER_IC_PORT` | `6680` | IntelliCenter WebSocket port |
 | `--http-port` | `PENTAMETER_HTTP_PORT` | `8080` | HTTP server port for metrics |
-| `--interval` | `PENTAMETER_INTERVAL` | `60` | Polling interval in seconds (minimum 5s) |
+| `--interval` | `PENTAMETER_INTERVAL` | `60` (10 in listen mode) | Polling interval in seconds |
+| `--metrics` | `PENTAMETER_METRICS` | `true` | Run as the Prometheus metrics exporter (the default mode) |
 | `--listen` | `PENTAMETER_LISTEN` | `false` | Enable live event monitoring mode |
+| `--homebridge` | `PENTAMETER_HOMEBRIDGE` | `false` | Run as a Homebridge sidecar (stdio JSON IPC) |
 | `--discover` | N/A | N/A | Discover IntelliCenter IP address and exit |
 | `--version` | N/A | N/A | Show version information |
+
+Modes (`--metrics`, `--listen`, `--homebridge`) are mutually exclusive; `--metrics` is the default. The `/metrics` HTTP endpoint is served in all modes.
 
 ### Auto-Discovery
 
@@ -354,6 +358,32 @@ Listen mode monitors all equipment types:
 - **Thermal Equipment**: Heaters and heat pumps with operational states
 - **Pumps**: Variable speed RPM changes (via polling)
 - **Unknown Equipment**: Any equipment type not specifically implemented
+
+## Homebridge Mode - Apple HomeKit Integration
+
+Homebridge mode (`--homebridge`) runs pentameter as a sidecar for the companion
+`homebridge-pentair-intellicenter-ai-ng` Homebridge plugin, exposing your IntelliCenter
+equipment to Apple HomeKit. The sidecar speaks a small
+newline-delimited JSON protocol to the Node plugin over stdio, so it is normally spawned by
+Homebridge rather than run by hand. The Prometheus `/metrics` endpoint continues to be served
+in this mode, so a single process can drive both HomeKit and Grafana.
+
+### Exposed Accessories
+
+- **Thermostats** - One per body (pool/spa) with setpoint and on/off control
+- **Switches** - Feature circuits flagged as Features (`FEATR=ON`) in IntelliCenter
+- **Light sensors** - Per-pump metrics (RPM, watts, GPM) encoded as lux for graphing in Home
+- **Occupancy sensors** - Per-pump "running" state, freeze-protection state, and a
+  "Pool Controller Online" connection-health sensor that flips when the controller link drops
+- **Temperature sensors** - Air temperature
+
+### Behavior
+
+- **Self-healing** - The accessory set reconciles on each poll cycle, so equipment added or
+  removed in IntelliCenter appears/disappears without restarting Homebridge
+- **Real-time** - Uses the same hybrid push + poll engine as the other modes
+- **Universal** - Uses IntelliCenter metadata (OBJTYP/SUBTYP), not equipment names, so it works
+  with any pool configuration
 
 ## Usage
 
