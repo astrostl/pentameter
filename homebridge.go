@@ -197,15 +197,11 @@ type hbMetrics struct {
 // recompute. It returns a handle whose onScan does the full poll-cadence refresh.
 func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 	met := &hbMetrics{pm: NewPoolMonitor("", "", false)}
-	// Suppress the per-object "Updated ..." / "Skipping feature" logs: in
-	// homebridge mode recompute runs every poll (and every push), so those would
-	// spam the Homebridge log with the full device state on a 30s cadence even
-	// when nothing changed. The shim emits its own meaningful change logs.
-	met.pm.quiet = true
 	registry := createPrometheusRegistry()
 
-	// Push-driven freshness: recompute (quietly) on every change between polls.
-	// A second engine subscriber, independent of the shim IPC subscriber.
+	// Push-driven freshness: recompute on every change between polls. A second
+	// engine subscriber, independent of the shim IPC subscriber. Logging is
+	// change-gated, so this only logs real transitions.
 	changes := engine.Subscribe()
 	go func() {
 		for range changes {
@@ -213,7 +209,7 @@ func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 			r := met.ready
 			met.mu.Unlock()
 			if r {
-				met.recompute(engine, true)
+				met.recompute(engine)
 			}
 		}
 	}()
@@ -242,11 +238,9 @@ func (m *hbMetrics) close() {
 	}
 }
 
-func (m *hbMetrics) recompute(engine *intellicenter.Engine, quiet bool) {
+func (m *hbMetrics) recompute(engine *intellicenter.Engine) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.pm.quiet = quiet
-	defer func() { m.pm.quiet = false }()
 	m.pm.refreshFromEngine(engine)
 }
 
@@ -261,7 +255,7 @@ func (m *hbMetrics) onScan(engine *intellicenter.Engine, err error) {
 	m.mu.Lock()
 	m.ready = true
 	m.mu.Unlock()
-	m.recompute(engine, false)
+	m.recompute(engine)
 	m.pm.updateRefreshTimestamp()
 }
 

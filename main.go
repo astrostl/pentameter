@@ -232,7 +232,7 @@ type PoolMonitor struct {
 	activeFeatureKeys      map[string]bool           // Track active feature metric keys for stale cleanup
 	previousState          *EquipmentState           // Previous state for change detection
 	mu                     sync.Mutex                // Protects concurrent access in listen mode
-	quiet                  bool                      // Suppress per-object "Updated ..." logs (engine push-driven recomputes)
+	lastLogged             map[string]string         // Last "Updated ..." line logged per object key; gates change-only logging
 	listenMode             bool                      // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool                      // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool                      // Track if freeze protection is currently active
@@ -282,6 +282,7 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		activeCircuitKeys:      make(map[string]bool),
 		activeFeatureKeys:      make(map[string]bool),
 		previousState:          nil,
+		lastLogged:             make(map[string]string),
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
 	}
@@ -503,7 +504,7 @@ func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status str
 	// Store temperature in Fahrenheit as per project standard
 	poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 	pm.trackWaterTemp(name, tempFahrenheit, obj)
-	pm.logIfNotListeningf("Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+	pm.logChangedf("watertemp:"+obj.ObjName, "Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 }
 
 func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string) {
@@ -519,7 +520,7 @@ func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string)
 
 	// HTMODE >= 1 means heater is on (1=actively heating, 2=on but not heating)
 	pm.bodyHeatingStatus[strings.ToLower(name)] = htmode >= 1
-	pm.logIfNotListeningf("Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
+	pm.logChangedf("bodyheat:"+objName, "Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
 }
 
 func (pm *PoolMonitor) processHeaterAssignment(
@@ -565,7 +566,7 @@ func (pm *PoolMonitor) applyAirTemperature(objs []ObjectData) {
 			// Store temperature in Fahrenheit as per project standard
 			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			pm.trackAirTemp(tempFahrenheit, obj)
-			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+			pm.logChangedf("airtemp:"+obj.ObjName, "Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
 	}
 }
@@ -588,13 +589,13 @@ func (pm *PoolMonitor) applyFreezeProtection(objs []ObjectData) {
 	for _, obj := range objs {
 		if obj.ObjName == objnamFreezeFeat && obj.Params[keySTATUS] == statusOn {
 			pm.freezeProtectionActive = true
-			pm.logIfNotListeningf("Freeze protection is ACTIVE")
+			pm.logChangedf("freeze", "Freeze protection is ACTIVE")
 			break
 		}
 	}
 
 	if !pm.freezeProtectionActive {
-		pm.logIfNotListeningf("Freeze protection is inactive")
+		pm.logChangedf("freeze", "Freeze protection is inactive")
 	}
 }
 
@@ -688,9 +689,7 @@ func (pm *PoolMonitor) logSkippedFeature(name, objName, shomnu string) {
 		return
 	}
 
-	if !pm.listenMode && !pm.quiet {
-		log.Printf("Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
-	}
+	pm.logChangedf("skip:"+objName, "Skipping feature with 'Show as Feature: NO': %s (%s) SHOMNU=%s", name, objName, shomnu)
 }
 
 func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subtype string, freezeEnabled bool) {
@@ -714,7 +713,7 @@ func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subty
 	pm.activeFeatureKeys[obj.ObjName+"|"+name+"|"+subtype] = true
 	pm.trackFeature(name, status)
 
-	pm.logIfNotListeningf("Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, statusDesc, statusValue)
+	pm.logChangedf("feature:"+obj.ObjName, "Updated feature status: %s (%s) = %s [%.0f]", name, obj.ObjName, statusDesc, statusValue)
 }
 
 func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string, freezeEnabled bool) float64 {
@@ -743,7 +742,7 @@ func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string, freezeEnable
 		}
 	}
 
-	pm.logIfNotListeningf("Updated heater circuit status: %s (%s) = %s [%.0f] (Body: %s, Heating: %v)",
+	pm.logChangedf("circuit:"+objName, "Updated heater circuit status: %s (%s) = %s [%.0f] (Body: %s, Heating: %v)",
 		name, objName, statusDesc, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
 
 	return statusValue
@@ -775,7 +774,7 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string, fre
 		}
 	}
 
-	pm.logIfNotListeningf("Updated circuit status: %s (%s) = %s [%.0f]", name, objName, statusDesc, statusValue)
+	pm.logChangedf("circuit:"+objName, "Updated circuit status: %s (%s) = %s [%.0f]", name, objName, statusDesc, statusValue)
 	return statusValue
 }
 
@@ -844,7 +843,7 @@ func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 	// Handle temperature setpoints
 	pm.updateThermalSetpoints(obj.ObjName, name, subtype, isReferenced, &bodyInfo, heaterStatusValue)
 
-	pm.logIfNotListeningf("Updated thermal status: %s (%s) = %d [%s]",
+	pm.logChangedf("thermal:"+obj.ObjName, "Updated thermal status: %s (%s) = %d [%s]",
 		name, obj.ObjName, heaterStatusValue, statusDescription)
 }
 
@@ -945,7 +944,7 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 }
 
 func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status string, responseTime time.Duration) {
-	pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
+	pm.logChangedf("pump:"+objName, "Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
 }
 
 func (pm *PoolMonitor) updateRefreshTimestamp() {
@@ -960,10 +959,25 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 	return defaultValue
 }
 
-func (pm *PoolMonitor) logIfNotListeningf(format string, v ...interface{}) {
-	if !pm.listenMode && !pm.quiet {
-		log.Printf(format, v...)
+// logChangedf logs the formatted message only when it differs from the last
+// message logged under the same key, so per-poll refreshes reporting an
+// unchanged value (e.g. "off -> off -> off") stay silent and only real state
+// transitions appear. Silent in listen mode, which has its own raw change feed.
+// This gates console logging ONLY: Prometheus gauges are Set() separately and
+// unconditionally on every poll, so /metrics and Grafana are unaffected.
+func (pm *PoolMonitor) logChangedf(key, format string, v ...interface{}) {
+	if pm.listenMode {
+		return
 	}
+	if pm.lastLogged == nil {
+		pm.lastLogged = make(map[string]string)
+	}
+	msg := fmt.Sprintf(format, v...)
+	if pm.lastLogged[key] == msg {
+		return
+	}
+	pm.lastLogged[key] = msg
+	log.Print(msg)
 }
 
 func (pm *PoolMonitor) initializeState() {

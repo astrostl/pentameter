@@ -30,11 +30,11 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 	var mu sync.Mutex
 	ready := false
 
-	recompute := func(quiet bool) {
+	// Logging is change-gated in refreshFromEngine (logChangedf), so push- and
+	// poll-driven recomputes both log only real transitions; no quiet toggle.
+	recompute := func() {
 		mu.Lock()
 		defer mu.Unlock()
-		pm.quiet = quiet
-		defer func() { pm.quiet = false }()
 		pm.refreshFromEngine(engine)
 	}
 
@@ -47,7 +47,7 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 		mu.Lock()
 		ready = true
 		mu.Unlock()
-		recompute(false) // full, logged refresh at the engine's poll cadence
+		recompute() // refresh at the engine's poll cadence (logs only changes)
 		pm.updateRefreshTimestamp()
 	}
 
@@ -59,7 +59,7 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 			r := ready
 			mu.Unlock()
 			if r {
-				recompute(true)
+				recompute()
 			}
 		}
 	}()
