@@ -18,7 +18,11 @@ const (
 	maxBufSize       = 1500
 )
 
-// DiscoverIntelliCenter discovers IntelliCenter via mDNS by looking for Pentair services on _http._tcp.
+// DiscoverIntelliCenter discovers IntelliCenter via mDNS by querying for the
+// pentair.local hostname (an A-record lookup) and returning its IPv4 address.
+// This intentionally does NOT do full DNS-SD service discovery (PTR/SRV/TXT), so
+// it yields only the IP — never a port. The protocol WebSocket port is fixed at
+// 6680 (see the ic-port flag), not advertised over mDNS.
 // Returns the IP address if found, or an error if discovery fails.
 // If verbose is true, logs each retry attempt.
 func DiscoverIntelliCenter(verbose bool) (string, error) {
