@@ -1300,7 +1300,7 @@ func defineFlags() *commandLineFlags {
 		metrics: flag.Bool("metrics", getEnvOrDefault("PENTAMETER_METRICS", "false") == trueString,
 			"Run as the Prometheus metrics exporter (the default mode; env: PENTAMETER_METRICS)"),
 		intelliCenterIP: flag.String("ic-ip", getEnvOrDefault("PENTAMETER_IC_IP", ""),
-			"IntelliCenter IP address (optional, will auto-discover if not provided, env: PENTAMETER_IC_IP)"),
+			"IntelliCenter IP address (env: PENTAMETER_IC_IP) (default mDNS auto-discovery)"),
 		intelliCenterPort: flag.String("ic-port", getEnvOrDefault("PENTAMETER_IC_PORT", "6680"),
 			"IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)"),
 		httpPort: flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"),
