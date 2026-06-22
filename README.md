@@ -729,10 +729,6 @@ intellicenter_last_refresh_timestamp_seconds
 
 ## Roadmap
 
-- Refactor monolithic main.go into focused modules
-- Implement structured logging with configurable levels
-- Add comprehensive integration tests
-- Implement automated coverage reporting
+- Finish extracting PoolMonitor logic out of main.go into focused modules
 - Alert rule templates and notification integrations
-- Update Makefile release targets to reflect current multi-step workflow
 
