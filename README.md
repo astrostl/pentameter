@@ -249,7 +249,7 @@ All configuration options can be set via command line flags or environment varia
 | `--discover` | N/A | N/A | Discover IntelliCenter IP address and exit |
 | `--version` | N/A | N/A | Show version information |
 
-Modes (`--metrics`, `--listen`, `--homebridge`) are mutually exclusive; `--metrics` is the default. The `/metrics` HTTP endpoint is served in all modes.
+The functions (`--version`, `--discover`) and modes (`--metrics`, `--listen`, `--homebridge`) are all mutually exclusive — pick at most one. When no function or mode is given, pentameter runs in metrics mode. The `/metrics` HTTP endpoint is served in all modes.
 
 ### Auto-Discovery
 
