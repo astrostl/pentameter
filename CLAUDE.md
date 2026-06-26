@@ -1,5 +1,15 @@
 # Claude Development Guide
 
+## TRMNL Integration
+
+This branch adds optional push of pool data to a [TRMNL](https://docs.trmnl.com/)
+e-ink display (`--trmnl-webhook`). **When doing any TRMNL-related work, read
+[TRMNL.md](TRMNL.md) first** — it documents the architecture, payload schema,
+setup, and the sample Liquid template (`trmnl/markup.liquid`). **Keep TRMNL.md up
+to date**: whenever you discover something new about TRMNL (payload limits,
+template behavior, plugin quirks) or change the integration, record it there so
+the next session starts ahead. The official reference is https://docs.trmnl.com/.
+
 ## Design Philosophy - CRITICAL
 
 **⚠️ UNIVERSAL COMPATIBILITY IS MANDATORY ⚠️**

@@ -1,0 +1,73 @@
+{% comment %}
+  Pentameter -> TRMNL private plugin markup (Webhook strategy).
+
+  Paste this into the "Markup" / "Edit Markup" field of your TRMNL private plugin.
+  It renders the merge_variables pentameter POSTs each cycle. Every variable the
+  pusher sends is available at the top level (bodies, air, pumps, heaters,
+  circuits, features, freeze_active, updated, updated_epoch). Trim or restyle
+  freely on the TRMNL side -- pentameter sends "everything" so you never need to
+  redeploy it to change the layout.
+
+  TRMNL design framework reference: https://docs.trmnl.com/go/private-plugins/templates
+{% endcomment %}
+
+<div class="layout">
+  <div class="columns">
+    <div class="column">
+      <span class="title">Water</span>
+      {% for b in bodies %}
+        <div class="item">
+          <span class="label">{{ b.name }}</span>
+          <span class="value value--large">{{ b.temp | round }}&deg;F</span>
+          <span class="description">
+            {{ b.on | default: false ? "on" : "off" }}{% if b.heat != "off" %} &middot; {{ b.heat }}{% endif %}
+          </span>
+        </div>
+      {% endfor %}
+      {% for a in air %}
+        <div class="item">
+          <span class="label">{{ a.name }}</span>
+          <span class="value">{{ a.temp | round }}&deg;F</span>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="column">
+      <span class="title">Equipment</span>
+      {% for p in pumps %}
+        <div class="item">
+          <span class="label">{{ p.name }}</span>
+          <span class="value">{{ p.rpm | round }} RPM</span>
+        </div>
+      {% endfor %}
+      {% for h in heaters %}
+        <div class="item">
+          <span class="label">{{ h.name }} ({{ h.subtype }})</span>
+          <span class="value">{{ h.status }}{% if h.setpoint_low > 0 %} &rarr; {{ h.setpoint_low | round }}&deg;F{% endif %}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="columns">
+    <div class="column">
+      <span class="title">Circuits</span>
+      {% for c in circuits %}
+        <span class="label">{{ c.name }}: {{ c.on ? "ON" : "off" }}</span>
+      {% endfor %}
+    </div>
+    <div class="column">
+      <span class="title">Features</span>
+      {% for f in features %}
+        <span class="label">{{ f.name }}: {{ f.on ? "ON" : "off" }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="title_bar">
+  <span class="title">Pentameter</span>
+  <span class="instance">
+    {% if freeze_active %}FREEZE PROTECTION ACTIVE &middot; {% endif %}updated {{ updated }}
+  </span>
+</div>

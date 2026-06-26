@@ -38,6 +38,13 @@ const (
 	// Listen mode polling interval (catches equipment that doesn't push).
 	listenModePollInterval = 10
 
+	// TRMNL push cadence (seconds). TRMNL rate-limits webhooks to 12 pushes/hour
+	// for standard accounts (one per 300s) and 30/hour for TRMNL+ (one per 120s);
+	// exceeding the limit returns 429. The default sits exactly at the standard
+	// limit; intervals below 300s need TRMNL+. See TRMNL.md.
+	defaultTRMNLInterval = 300
+	minTRMNLInterval     = 60
+
 	// Metric key parts count (objnam|name|subtype).
 	metricKeyPartsCount = 3
 
@@ -1293,20 +1300,24 @@ type appConfig struct {
 	intelliCenterIP   string
 	intelliCenterPort string
 	httpPort          string // port the HTTP /metrics server binds, in every mode
+	trmnlWebhook      string // TRMNL private-plugin webhook URL; empty disables TRMNL push
 	listenMode        bool
 	homebridge        bool
 	autoDiscover      bool // no static IP given → (re)discover via mDNS
 	pollInterval      time.Duration
+	trmnlInterval     time.Duration // gap between TRMNL pushes (independent of pollInterval)
 }
 
 type commandLineFlags struct {
 	intelliCenterIP   *string
 	intelliCenterPort *string
 	httpPort          *string
+	trmnlWebhook      *string
 	metrics           *bool
 	listenMode        *bool
 	homebridge        *bool
 	pollInterval      *int
+	trmnlInterval     *int
 	showVersion       *bool
 	discoverOnly      *bool
 }
@@ -1323,6 +1334,11 @@ func defineFlags() *commandLineFlags {
 			"IntelliCenter WebSocket port (env: PENTAMETER_IC_PORT)"),
 		httpPort: flag.String("http-port", getEnvOrDefault("PENTAMETER_HTTP_PORT", "8080"),
 			"HTTP server port for metrics (env: PENTAMETER_HTTP_PORT)"),
+		trmnlWebhook: flag.String("trmnl-webhook", getEnvOrDefault("PENTAMETER_TRMNL_WEBHOOK", ""),
+			"TRMNL private-plugin webhook URL; when set, push pool data to TRMNL each cycle "+
+				"alongside the active mode (env: PENTAMETER_TRMNL_WEBHOOK). Ignored in listen mode. See TRMNL.md"),
+		trmnlInterval: flag.Int("trmnl-interval", getEnvIntOrDefault("PENTAMETER_TRMNL_INTERVAL", 0),
+			"Seconds between TRMNL pushes (env: PENTAMETER_TRMNL_INTERVAL) (default 300)"),
 		listenMode: flag.Bool("listen", getEnvOrDefault("PENTAMETER_LISTEN", "false") == trueString,
 			"Run as a live event logger with raw JSON output (env: PENTAMETER_LISTEN)"),
 		homebridge: flag.Bool("homebridge", getEnvOrDefault("PENTAMETER_HOMEBRIDGE", "false") == trueString,
@@ -1376,6 +1392,22 @@ func determinePollInterval(pollIntervalSeconds int, listenMode bool) time.Durati
 	return defaultPollInterval * time.Second
 }
 
+// determineTRMNLInterval resolves the gap between TRMNL pushes. It is independent
+// of the IntelliCenter poll interval: TRMNL e-ink refreshes are slow and the
+// service discourages frequent updates, so the default is deliberately coarse.
+// Values below the minimum are raised with a warning.
+func determineTRMNLInterval(trmnlIntervalSeconds int) time.Duration {
+	if trmnlIntervalSeconds > 0 {
+		if trmnlIntervalSeconds < minTRMNLInterval {
+			log.Printf("Warning: trmnl-interval %ds is below minimum (%ds), using %ds",
+				trmnlIntervalSeconds, minTRMNLInterval, minTRMNLInterval)
+			return minTRMNLInterval * time.Second
+		}
+		return time.Duration(trmnlIntervalSeconds) * time.Second
+	}
+	return defaultTRMNLInterval * time.Second
+}
+
 // newDiscoveryResolver returns an engine Resolve hook that rediscovers the
 // IntelliCenter via mDNS before each (re)connect, or nil when a static IP was
 // configured (no rediscovery needed). This lets the engine-driven modes follow a
@@ -1416,6 +1448,7 @@ func doubleDashUsage() {
 		{"Functions (run once and exit)", []string{"discover", "version"}},
 		{"Modes", []string{"metrics", "homebridge", "listen"}},
 		{"Configuration", []string{"ic-ip", "ic-port", "http-port", "interval"}},
+		{"Integrations (run alongside the active mode)", []string{"trmnl-webhook", "trmnl-interval"}},
 	}
 	for _, grp := range groups {
 		fmt.Fprintf(out, "\n%s:\n", grp.title)
@@ -1483,9 +1516,11 @@ func parseCommandLineFlags() *appConfig {
 		intelliCenterIP:   *flags.intelliCenterIP,
 		intelliCenterPort: *flags.intelliCenterPort,
 		httpPort:          *flags.httpPort,
+		trmnlWebhook:      *flags.trmnlWebhook,
 		listenMode:        *flags.listenMode,
 		homebridge:        *flags.homebridge,
 		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
+		trmnlInterval:     determineTRMNLInterval(*flags.trmnlInterval),
 	}
 	cfg.autoDiscover = cfg.intelliCenterIP == ""
 	// All modes now run an intellicenter.Engine, which rediscovers via its Resolve
@@ -1542,6 +1577,15 @@ func bindMetricsServer(registry *prometheus.Registry, monitor *PoolMonitor, http
 
 func main() {
 	cfg := parseCommandLineFlags()
+
+	// TRMNL push is mode-agnostic: when a webhook is configured it runs its own
+	// intellicenter.Engine in the background alongside whichever mode is active
+	// (metrics or homebridge), so no mode-specific code needs to know about it.
+	// Skipped in listen mode — a debugging path that already runs its own engine,
+	// where a second connection would only add noise.
+	if cfg.trmnlWebhook != "" && !cfg.listenMode {
+		go runTRMNLPusher(cfg)
+	}
 
 	if cfg.homebridge {
 		runHomebridge(cfg)
