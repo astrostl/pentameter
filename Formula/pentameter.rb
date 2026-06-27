@@ -1,15 +1,15 @@
 class Pentameter < Formula
   desc "Prometheus exporter for Pentair IntelliCenter pool controllers"
   homepage "https://github.com/astrostl/pentameter"
-  version "0.5.2"
+  version "0.6.0"
   license "MIT"
 
   if OS.mac? && Hardware::CPU.arm?
-    url "https://github.com/astrostl/pentameter/releases/download/v0.5.2/pentameter-v0.5.2-darwin-arm64.tar.gz"
-    sha256 "ab20785342fdc05c94eab7606b0eb5678b7e4da4f1e4b0739767d1d7b51f8e7b"
+    url "https://github.com/astrostl/pentameter/releases/download/v0.6.0/pentameter-v0.6.0-darwin-arm64.tar.gz"
+    sha256 "281d56b3df59bdc5b7c4e18ebd5ad76dcb4f3fb6584fb7d3c82ac525b0e83bda"
   elsif OS.mac? && Hardware::CPU.intel?
-    url "https://github.com/astrostl/pentameter/releases/download/v0.5.2/pentameter-v0.5.2-darwin-amd64.tar.gz"
-    sha256 "e7be8cdbfe31184a27ab5537028105204828e66be536c8880667faecfb3ebac5"
+    url "https://github.com/astrostl/pentameter/releases/download/v0.6.0/pentameter-v0.6.0-darwin-amd64.tar.gz"
+    sha256 "f8b3028afe241e6db872a85e6c09929548061d2ad04b78c1db19b55ba0c2876b"
   else
     odie "Pentameter is only supported on macOS via Homebrew. Use Docker or build from source for Linux deployment."
   end
