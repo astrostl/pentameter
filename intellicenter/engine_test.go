@@ -163,6 +163,37 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	waitFor(t, sawRawPush.Load)
 }
 
+// TestEnginePMPCircBaselineAndRefresh verifies the circuit⇄pump graph is fetched
+// once at baseline (surfaced via RawObjects) and that static config (PMPCIRC +
+// GetConfiguration) is re-pulled on the periodic poll cadence, not every poll.
+func TestEnginePMPCircBaselineAndRefresh(t *testing.T) {
+	mock := newEngineMock(t)
+	defer mock.close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(mock.srv.URL, "http://"), ":")
+
+	e := NewEngine(host, port, time.Millisecond) // fast poll so 60-poll refresh fires quickly
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = e.Run(ctx) }()
+
+	// Baseline: PMPCIRC fetched once and exposed as a raw object with its kind.
+	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
+	waitFor(t, func() bool { return mock.pmpcQueries.Load() >= 1 && mock.cfgQueries.Load() >= 1 })
+	var pc RawObject
+	for _, o := range e.RawObjects() {
+		if o.ObjName == "p0101" {
+			pc = o
+		}
+	}
+	if pc.Kind != KindPMPCirc || pc.Params["CIRCUIT"] != "C0001" || pc.Params["PARENT"] != "PMP01" {
+		t.Fatalf("PMPCIRC not surfaced via RawObjects at baseline: %+v", pc)
+	}
+
+	// After configRefreshPolls successful polls, both static-config fetches run again.
+	waitFor(t, func() bool { return mock.pmpcQueries.Load() >= 2 && mock.cfgQueries.Load() >= 2 })
+}
+
 // TestEngineResolveDrivesDial verifies the engine dials the host returned by the
 // Resolve hook (not the placeholder passed to NewEngine), and calls it before
 // connecting.
@@ -281,10 +312,12 @@ func waitFor(t *testing.T, cond func() bool) {
 // engineMock is a write-safe mock IntelliCenter supporting multiple connections
 // (the engine opens two) and unsolicited broadcast pushes.
 type engineMock struct {
-	srv     *httptest.Server
-	mu      sync.Mutex
-	conns   []*safeConn
-	lastReq Request
+	srv         *httptest.Server
+	mu          sync.Mutex
+	conns       []*safeConn
+	lastReq     Request
+	cfgQueries  atomic.Int32 // GetConfiguration (feature visibility) calls
+	pmpcQueries atomic.Int32 // PMPCIRC (circuit⇄pump graph) calls
 }
 
 type safeConn struct {
@@ -325,6 +358,9 @@ func newEngineMock(t *testing.T) *engineMock {
 func (m *engineMock) handle(sc *safeConn, req Request) {
 	switch req.Command {
 	case "GetParamList":
+		if req.Condition == condPMPCirc {
+			m.pmpcQueries.Add(1)
+		}
 		sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "200", ObjectList: m.objectsFor(req)})
 	case "SetParamList":
 		m.mu.Lock()
@@ -332,6 +368,7 @@ func (m *engineMock) handle(sc *safeConn, req Request) {
 		m.mu.Unlock()
 		sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "200"})
 	case cmdGetQuery:
+		m.cfgQueries.Add(1)
 		// GetConfiguration → "answer" envelope with FTR SHOMNU visibility flags.
 		sc.writeJSON(map[string]any{
 			"command":   req.Command,
@@ -356,6 +393,8 @@ func (m *engineMock) objectsFor(req Request) []ObjectData {
 		return []ObjectData{{ObjName: "B1101", Params: map[string]string{
 			"SNAME": "Pool", "STATUS": "ON", "TEMP": "82", "SUBTYP": "POOL", "HTMODE": "1", "HTSRC": "H0001", "LOTMP": "85", "HITMP": "104",
 		}}}
+	case condPMPCirc:
+		return []ObjectData{{ObjName: "p0101", Params: map[string]string{"CIRCUIT": "C0001", "PARENT": "PMP01"}}}
 	}
 	// Air sensor is queried by objnam with no condition.
 	if len(req.ObjectList) == 1 && req.ObjectList[0].ObjName == airSensorObjnam {

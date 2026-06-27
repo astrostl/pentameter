@@ -435,6 +435,12 @@ circuit_status{circuit="C0003",name="Pool Light",type="LIGHT"} 0
 circuit_status{circuit="FTR01",name="Spa Heat",type="GENERIC"} 0
 ```
 
+> A circuit or feature that drives a pump reads `1` only when it is **commanded on
+> AND that pump is actually running** (RPM > 0). If a circuit is left on but its
+> pump has no power (e.g. a popped breaker), `circuit_status` reads `0` — the
+> dashboard reflects what is physically running, not just what was requested.
+> Circuits that drive no pump (lights, blowers) are unaffected.
+
 ### Thermal Equipment Metrics
 
 **thermal_status Values - Pentameter's Interpretation Layer:**
@@ -513,7 +519,7 @@ pump_status{pump="PMP01",name="VS",subtyp="PUMP"} 1
 - **Automatic Reappearance**: Equipment metrics return when equipment comes back online
 
 ### Graceful Degradation Examples
-- **Pump Offline**: `pump_rpm` metrics disappear, water temperature monitoring continues
+- **Pump Offline**: `pump_rpm` metrics disappear; any circuit/feature that drives that pump reads `circuit_status=0` (commanded on but not physically running), water temperature monitoring continues
 - **Heater Offline**: `thermal_status` metrics disappear, circuit monitoring continues  
 - **Sensor Offline**: `air_temperature` metrics disappear, pool/spa monitoring continues
 - **Service Recovery**: All equipment metrics reappear when service reconnects to IntelliCenter

@@ -12,6 +12,12 @@ const (
 	engineSubBuffer = 64
 	airSensorObjnam = "_A135"
 	engineReconnect = 2 * time.Second
+	// configRefreshPolls re-pulls the static config (feature visibility + the
+	// circuit⇄pump graph) every N successful polls so a reconfiguration is picked
+	// up without waiting for a reconnect. Cadence rides the poll interval (60
+	// polls = 1h at the default 60s); both fetches are lighter than one equipment
+	// poll, so erring fast just means slightly fresher config.
+	configRefreshPolls = 60
 )
 
 // Snapshot is the engine's current view of all known equipment, keyed by objnam.
@@ -328,7 +334,8 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 	if err := e.scan(req); err != nil {
 		return fmt.Errorf("baseline: %w", err)
 	}
-	e.loadConfig(req) // best-effort: feature visibility, never fatal to a session
+	e.loadConfig(req)       // best-effort: feature visibility, never fatal to a session
+	e.scanPumpCircuits(req) // best-effort: static circuit⇄pump graph, fetched once per session
 	e.setReqClient(req)
 	e.onScan(nil) // baseline succeeded → live
 	e.onRawPoll(req, true)
@@ -345,6 +352,9 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 func (e *Engine) pollLoop(ctx context.Context, req *Client) {
 	ticker := time.NewTicker(e.pollEvery)
 	defer ticker.Stop()
+	// Runs in this single goroutine alongside scan(), so static-config refreshes
+	// reuse req without racing the connection. Counts only successful polls.
+	pollsSinceConfig := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -357,6 +367,12 @@ func (e *Engine) pollLoop(ctx context.Context, req *Client) {
 			e.onScan(err)
 			if err == nil {
 				e.onRawPoll(req, false)
+				pollsSinceConfig++
+				if pollsSinceConfig >= configRefreshPolls {
+					pollsSinceConfig = 0
+					e.loadConfig(req)       // best-effort: feature visibility
+					e.scanPumpCircuits(req) // best-effort: circuit⇄pump graph
+				}
 			}
 		}
 	}
@@ -409,6 +425,32 @@ func (e *Engine) scan(req *Client) error {
 		e.applyAndEmit(KindSensor, airSensorObjnam, params)
 	}
 	return nil
+}
+
+// scanPumpCircuits records the PMPCIRC speed-assignment objects that map each
+// driven circuit/feature (CIRCUIT) to the pump that runs it (PARENT). These have
+// no real SNAME, so they bypass the SNAME-gated equipment loop. Stored raw (no
+// typed snapshot, no Change emitted — see reparseLocked's default case) and
+// surfaced via RawObjects for the metrics engine's circuit⇄pump gating.
+//
+// This is static configuration (it changes only when pump speed assignments are
+// reprogrammed), so it is fetched once per session at baseline — like loadConfig
+// — rather than on every poll. The merged params persist in e.params, so every
+// subsequent RawObjects recompute still sees the graph without re-querying. A
+// reconnect re-baselines and picks up any reconfiguration. Best-effort: a failure
+// here must not break a session.
+func (e *Engine) scanPumpCircuits(req *Client) {
+	objs, err := req.query(string(KindPMPCirc), condPMPCirc, pmpCircKeys)
+	if err != nil {
+		e.logf("engine: PMPCIRC scan failed (pump-delivery gating degraded): %v", err)
+		return
+	}
+	for _, o := range objs {
+		if o.Params[keyCircuit] == "" || o.Params[keyParent] == "" {
+			continue
+		}
+		e.applyAndEmit(KindPMPCirc, o.ObjName, o.Params)
+	}
 }
 
 func (e *Engine) querySensor(c *Client, objnam string) (map[string]string, bool) {
@@ -564,6 +606,11 @@ func (e *Engine) reparseLocked(kind Kind, objnam string, params map[string]strin
 	case KindSensor:
 		v := sensorFrom(objnam, params)
 		return Change{Sensor: &v}, diffStore(e.snap.Sensors, objnam, v)
+	case KindPMPCirc:
+		// Raw-only: PMPCIRC speed assignments are merged into e.params for the
+		// metrics engine's circuit⇄pump gating, but carry no typed snapshot and
+		// emit no Change (static config, not live equipment state).
+		return Change{}, false
 	default:
 		return Change{}, false
 	}

@@ -283,8 +283,18 @@ The `GetParamList` command retrieves current operational data for monitoring.
 ```
 
 **Response includes:**
-- **STATUS**: numeric code — `"10"` = running, other values = stopped. NOT `"ON"`/`"OFF"`
-  (unlike circuits). Derive on/off from `RPM > 0`, which is unambiguous.
+- **STATUS**: numeric code — NOT `"ON"`/`"OFF"` (unlike circuits). Verified on
+  hardware: `"10"` = running, `"4"` = stopped/no power (pump unpowered or RS‑485
+  comms lost — `RPM` and `PWR` both read `0`). Derive on/off from `RPM > 0`, which
+  is unambiguous regardless of code. ⚠️ A *legitimately idle but powered* pump
+  (no circuit demanding it) was not observed — its code is unconfirmed and may
+  also be `"4"`, so do **not** treat `STATUS=="4"` alone as a fault. See "Power /
+  comms loss detection" below.
+- **ALARM**: pump alarm flag, `"OFF"` when healthy. ⚠️ **Does NOT track power
+  loss.** Verified by cutting the pump breaker: IntelliCenter's cloud raised a
+  "VS Pump Power Outage Alarm" SMS, yet `ALARM` stayed `"OFF"` on the local
+  WebSocket the entire time. The power-outage notification is a Pentair-cloud
+  construct and is not exposed locally; use the STATUS/RPM/PWR signal instead.
 - **RPM**: current revolutions per minute
 - **MAX**: configured maximum speed (RPM). Verified `3450` on VS and VSF pumps.
 - **PWR**: ⚠️ **real power draw in watts — use this, NOT `WATTS`.** The intuitive
@@ -298,6 +308,29 @@ The `GetParamList` command retrieves current operational data for monitoring.
   returns a nonzero GPM (e.g. VS pump: `MAXF=0`, `GPM=55`); that number is a
   controller estimate. Only trust GPM when `MAXF > 0` (flow-capable VSF pumps).
 - **MAXF**: maximum flow (GPM). `0` means the pump has no flow capability — see GPM caveat above.
+
+**Power / comms loss detection (no native alert over WebSocket):**
+
+When a pump loses power (popped breaker, tripped GFCI) or its RS‑485 comms drop,
+IntelliCenter knows — it sends a "Pump Power Outage Alarm" SMS — but that alert
+travels over **Pentair's cloud, not the local WebSocket**. Locally there is no
+alarm to read (`ALARM` stays `"OFF"`). The condition is still observable from
+operational data. Verified by cutting the VS pump breaker for ~3 minutes:
+
+| | ALARM | STATUS | RPM | PWR |
+|---|---|---|---|---|
+| running | OFF | `10` | 1800 | 213 |
+| no power | OFF | `4` | 0 | 0 |
+
+The transition appeared on the very next poll and reverted to `10` one poll after
+power was restored, so detection latency ≈ the poll interval.
+
+Because an idle-but-powered pump's STATUS is unconfirmed, the **robust, universal
+signal is "demand without delivery"**: a circuit is `STATUS=ON` while the pump
+that serves it (the pump's `CIRCUIT` field, or the PMPCIRC graph below) reports
+`RPM=0`/`PWR=0`. That keys off real failure semantics and needs no STATUS-code
+table or name-based logic. During the test `C0001` (Spa) read `ON` while its
+pump `PMP01` sat at `STATUS=4`, `RPM=0`, `PWR=0` — exactly that condition.
 
 **Per-circuit speed programs (PMPCIRC) — the circuit⇄pump⇄speed graph:**
 
@@ -384,10 +417,12 @@ Example (PMP01 / VS pump):
 
 **Pumps (OBJTYP=PUMP):**
 - **SNAME**: Display name
-- **STATUS**: numeric code ("10"=running); derive on/off from RPM > 0
+- **STATUS**: numeric code ("10"=running, "4"=stopped/no power); derive on/off from RPM > 0
+- **ALARM**: alarm flag ("OFF"=healthy); does NOT track power loss — see Pump Monitoring above
 - **RPM**: Current speed; **MAX**: configured max speed
 - **PWR**: real power (watts) — NOT the `WATTS` key (garbage echo); see Pump Monitoring above
 - **GPM**: flow rate — estimated unless `MAXF > 0`; see Pump Monitoring above
+- **CIRCUIT**: the pump's primary driving circuit — used for power/comms-loss detection (see Pump Monitoring above)
 
 **Sensors (OBJTYP=SENSE):**
 - **SNAME**: Display name

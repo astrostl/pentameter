@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,9 +51,10 @@ const (
 	circuitStatusFreezeProtected = 2.0
 
 	// Status description strings.
-	statusDescOff    = "OFF"
-	statusDescOn     = "ON"
-	statusDescFreeze = keyFREEZE
+	statusDescOff      = "OFF"
+	statusDescOn       = "ON"
+	statusDescFreeze   = keyFREEZE
+	statusDescPumpIdle = "OFF (pump not running)"
 
 	// Boolean string constants.
 	trueString = "true"
@@ -123,6 +125,7 @@ const (
 	keyHITMP   = "HITMP"
 	keyPWR     = "PWR" // pump real power draw (watts)
 	keyPARENT  = "PARENT"
+	keyCIRCUIT = "CIRCUIT" // PMPCIRC: the driven circuit/feature objnam
 	keyUSE     = "USE"
 	keyLISTORD = "LISTORD"
 	keySTATIC  = "STATIC"
@@ -182,7 +185,9 @@ var (
 	circuitStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "circuit_status",
-			Help: "Circuit status (0=off, 1=on, 2=freeze protection active)",
+			Help: "Circuit status (0=off, 1=on, 2=freeze protection active). A circuit that drives a pump " +
+				"reads on only if it is commanded on AND that pump is actually running (RPM>0); a commanded-on " +
+				"circuit whose pump has no power reads off.",
 		},
 		[]string{logFieldCircuit, fieldName, fieldSubtyp},
 	)
@@ -216,7 +221,9 @@ var (
 	featureStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "feature_status",
-			Help: "Feature status (0=off, 1=on, 2=freeze protection active)",
+			Help: "Feature status (0=off, 1=on, 2=freeze protection active). A feature that drives a pump " +
+				"reads on only if it is commanded on AND that pump is actually running (RPM>0); a commanded-on " +
+				"feature whose pump has no power reads off.",
 		},
 		[]string{"feature", fieldName, fieldSubtyp},
 	)
@@ -238,6 +245,8 @@ type PoolMonitor struct {
 	listenMode             bool                      // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool                      // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool                      // Track if freeze protection is currently active
+	pumpRunning            map[string]bool           // pump objnam -> actually running (RPM>0); rebuilt each refresh
+	circuitToPumps         map[string][]string       // driven circuit/feature objnam -> pump objnams (from PMPCIRC); rebuilt each refresh
 }
 
 // CircGrpState tracks the state of a circuit group member.
@@ -287,6 +296,8 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		lastLogged:             make(map[string]string),
 		listenMode:             listenMode,
 		freezeProtectionActive: false,
+		pumpRunning:            make(map[string]bool),
+		circuitToPumps:         make(map[string][]string),
 	}
 }
 
@@ -576,11 +587,55 @@ func (pm *PoolMonitor) applyAirTemperature(objs []ObjectData) {
 // applyPumpData updates pump metrics from a set of pump objects. responseTime is
 // for logging only (0 when sourced from the engine snapshot rather than a query).
 func (pm *PoolMonitor) applyPumpData(objs []ObjectData, responseTime time.Duration) {
+	// Rebuilt each refresh so circuit status can be gated on whether the pump a
+	// circuit drives is physically running (RPM>0), not just commanded on.
+	pm.pumpRunning = make(map[string]bool, len(objs))
 	for _, obj := range objs {
 		if err := pm.processPumpObject(obj, responseTime); err != nil {
 			log.Printf("Failed to process pump object %s: %v", obj.ObjName, err)
 		}
 	}
+}
+
+// applyPumpAssociations rebuilds circuitToPumps from PMPCIRC speed-assignment
+// objects: each maps a driven circuit/feature (CIRCUIT) to the pump that runs it
+// (PARENT). This is the IntelliCenter metadata that lets a circuit's status
+// reflect whether the pump it drives is actually delivering, rather than only
+// whether the circuit was commanded on. Configuration-agnostic: it reads the
+// real graph, no equipment names or fixed circuit assumptions.
+func (pm *PoolMonitor) applyPumpAssociations(objs []ObjectData) {
+	assoc := make(map[string][]string, len(objs))
+	for _, obj := range objs {
+		circuit := obj.Params[keyCIRCUIT]
+		pump := obj.Params[keyPARENT]
+		if circuit == "" || pump == "" {
+			continue
+		}
+		if !slices.Contains(assoc[circuit], pump) {
+			assoc[circuit] = append(assoc[circuit], pump)
+		}
+	}
+	pm.circuitToPumps = assoc
+}
+
+// applyPumpDeliveryGate floors a circuit/feature's status to OFF when it drives
+// one or more pumps but none are actually running (RPM>0) — i.e. it was
+// commanded on yet isn't physically delivering (e.g. a pump lost power). A
+// circuit with no pump association, or one already OFF, is returned unchanged.
+func (pm *PoolMonitor) applyPumpDeliveryGate(objName string, statusValue float64) float64 {
+	if statusValue == circuitStatusOff {
+		return statusValue
+	}
+	pumps := pm.circuitToPumps[objName]
+	if len(pumps) == 0 {
+		return statusValue
+	}
+	for _, p := range pumps {
+		if pm.pumpRunning[p] {
+			return statusValue
+		}
+	}
+	return circuitStatusOff
 }
 
 // applyFreezeProtection sets freezeProtectionActive from the _FEA2 feature's status.
@@ -712,6 +767,12 @@ func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subty
 		}
 	}
 
+	// Floor to OFF if commanded on but the pump(s) this feature drives aren't running.
+	if gated := pm.applyPumpDeliveryGate(obj.ObjName, statusValue); gated != statusValue {
+		statusValue = gated
+		statusDesc = statusDescPumpIdle
+	}
+
 	// Update Prometheus metric using IntelliCenter's SUBTYP
 	featureStatus.WithLabelValues(obj.ObjName, name, subtype).Set(statusValue)
 	pm.activeFeatureKeys[obj.ObjName+"|"+name+"|"+subtype] = true
@@ -746,6 +807,12 @@ func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string, freezeEnable
 		}
 	}
 
+	// Floor to OFF if commanded on but the pump(s) this circuit drives aren't running.
+	if gated := pm.applyPumpDeliveryGate(objName, statusValue); gated != statusValue {
+		statusValue = gated
+		statusDesc = statusDescPumpIdle
+	}
+
 	pm.logChangedf("circuit:"+objName, "Updated heater circuit status: %s (%s) = %s [%.0f] (Body: %s, Heating: %v)",
 		name, objName, statusDesc, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
 
@@ -776,6 +843,12 @@ func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string, fre
 			statusValue = circuitStatusOn
 			statusDesc = statusDescOn
 		}
+	}
+
+	// Floor to OFF if commanded on but the pump(s) this circuit drives aren't running.
+	if gated := pm.applyPumpDeliveryGate(objName, statusValue); gated != statusValue {
+		statusValue = gated
+		statusDesc = statusDescPumpIdle
 	}
 
 	pm.logChangedf("circuit:"+objName, "Updated circuit status: %s (%s) = %s [%.0f]", name, objName, statusDesc, statusValue)
@@ -942,6 +1015,7 @@ func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Durat
 	}
 
 	pumpRPM.WithLabelValues(obj.ObjName, name).Set(rpm)
+	pm.pumpRunning[obj.ObjName] = rpm > 0
 	pm.trackPumpRPM(name, rpm, obj)
 	pm.logPumpUpdate(name, obj.ObjName, rpm, status, responseTime)
 	return nil

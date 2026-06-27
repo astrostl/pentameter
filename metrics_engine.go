@@ -95,7 +95,7 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 func (pm *PoolMonitor) refreshFromEngine(e *intellicenter.Engine) {
 	pm.featureConfig = e.Config()
 
-	var bodies, circuits, pumps, heaters, sensors []ObjectData
+	var bodies, circuits, pumps, heaters, sensors, pmpCircs []ObjectData
 	for _, o := range e.RawObjects() {
 		od := ObjectData{ObjName: o.ObjName, Params: o.Params}
 		switch o.Kind {
@@ -109,13 +109,16 @@ func (pm *PoolMonitor) refreshFromEngine(e *intellicenter.Engine) {
 			heaters = append(heaters, od)
 		case intellicenter.KindSensor:
 			sensors = append(sensors, od)
+		case intellicenter.KindPMPCirc:
+			pmpCircs = append(pmpCircs, od)
 		}
 	}
 
 	pm.applyBodyTemperatures(bodies)
 	pm.applyAirTemperature(sensors)
-	pm.applyPumpData(pumps, 0)
+	pm.applyPumpData(pumps, 0)         // sets pm.pumpRunning (RPM>0 per pump)
+	pm.applyPumpAssociations(pmpCircs) // sets pm.circuitToPumps (circuit→pumps)
 	pm.applyFreezeProtection(circuits) // _FEA2 lives among the circuit objects
-	pm.applyCircuitStatus(circuits)
+	pm.applyCircuitStatus(circuits)    // gates circuit/feature ON on pump delivery
 	pm.applyThermalStatus(heaters)
 }

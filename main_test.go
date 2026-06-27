@@ -274,6 +274,78 @@ func TestCalculateCircuitStatusValue(t *testing.T) {
 	}
 }
 
+func TestApplyPumpAssociations(t *testing.T) {
+	pm := NewPoolMonitor("test", "6680", false)
+	pm.applyPumpAssociations([]ObjectData{
+		{ObjName: "p0101", Params: map[string]string{"CIRCUIT": "C0001", "PARENT": "PMP01"}},
+		{ObjName: "p0103", Params: map[string]string{"CIRCUIT": "FTR03", "PARENT": "PMP01"}},
+		{ObjName: "p0201", Params: map[string]string{"CIRCUIT": "C0006", "PARENT": "PMP02"}},
+		// duplicate driver (same circuit + pump) must not double-add
+		{ObjName: "pDUPE", Params: map[string]string{"CIRCUIT": "C0001", "PARENT": "PMP01"}},
+		// incomplete rows are ignored
+		{ObjName: "pBAD", Params: map[string]string{"CIRCUIT": "C0009"}},
+	})
+
+	if got := pm.circuitToPumps["C0001"]; len(got) != 1 || got[0] != "PMP01" {
+		t.Errorf("C0001 -> %v, want [PMP01]", got)
+	}
+	if got := pm.circuitToPumps["FTR03"]; len(got) != 1 || got[0] != "PMP01" {
+		t.Errorf("FTR03 -> %v, want [PMP01]", got)
+	}
+	if _, ok := pm.circuitToPumps["C0009"]; ok {
+		t.Error("incomplete PMPCIRC row should not create an association")
+	}
+}
+
+func TestApplyPumpDeliveryGate(t *testing.T) {
+	pm := NewPoolMonitor("test", "6680", false)
+	pm.circuitToPumps = map[string][]string{
+		"C0001": {"PMP01"},          // Spa -> VS
+		"FTR03": {"PMP01"},          // Spa Jets -> VS
+		"GRP01": {"PMP01", "PMP02"}, // multi-pump driver
+	}
+
+	tests := []struct {
+		name    string
+		objName string
+		running map[string]bool
+		in      float64
+		want    float64
+	}{
+		{"on + pump running stays on", "C0001", map[string]bool{"PMP01": true}, circuitStatusOn, circuitStatusOn},
+		{"on + pump dead floors to off", "C0001", map[string]bool{"PMP01": false}, circuitStatusOn, circuitStatusOff},
+		{"freeze + pump dead floors to off", "C0001", map[string]bool{"PMP01": false}, circuitStatusFreezeProtected, circuitStatusOff},
+		{"already off stays off", "C0001", map[string]bool{"PMP01": true}, circuitStatusOff, circuitStatusOff},
+		{"no association is passthrough", "C0002", map[string]bool{}, circuitStatusOn, circuitStatusOn},
+		{"any running pump satisfies", "GRP01", map[string]bool{"PMP01": false, "PMP02": true}, circuitStatusOn, circuitStatusOn},
+		{"all pumps dead floors to off", "GRP01", map[string]bool{"PMP01": false, "PMP02": false}, circuitStatusOn, circuitStatusOff},
+	}
+	for _, tt := range tests {
+		pm.pumpRunning = tt.running
+		if got := pm.applyPumpDeliveryGate(tt.objName, tt.in); got != tt.want {
+			t.Errorf("%s: applyPumpDeliveryGate(%s, %.0f) = %.0f, want %.0f", tt.name, tt.objName, tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestCircuitStatusGatedByPump is the end-to-end of the reported failure: the Spa
+// circuit is commanded ON but its pump lost power (RPM=0), so circuit_status must
+// read OFF instead of a falsely-healthy ON.
+func TestCircuitStatusGatedByPump(t *testing.T) {
+	pm := NewPoolMonitor("test", "6680", false)
+	pm.circuitToPumps = map[string][]string{"C0001": {"PMP01"}}
+
+	pm.pumpRunning = map[string]bool{"PMP01": true}
+	if got := pm.calculateCircuitStatusValue("Spa", statusOn, "C0001", false); got != circuitStatusOn {
+		t.Errorf("Spa ON with pump running: got %.0f, want %.0f", got, circuitStatusOn)
+	}
+
+	pm.pumpRunning = map[string]bool{"PMP01": false} // breaker popped
+	if got := pm.calculateCircuitStatusValue("Spa", statusOn, "C0001", false); got != circuitStatusOff {
+		t.Errorf("Spa ON but pump dead: got %.0f, want %.0f (should floor to off)", got, circuitStatusOff)
+	}
+}
+
 func TestProcessPumpObjectWithInvalidRPM(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 

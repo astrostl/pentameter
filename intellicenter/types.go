@@ -186,10 +186,16 @@ const (
 	keyGPM   = "GPM"
 	keyMaxF  = "MAXF" // max flow; 0 == pump has no flow capability (GPM is estimated)
 
+	// PMPCIRC speed-assignment keys: CIRCUIT is the driven circuit/feature objnam,
+	// PARENT is the pump that runs it. Together they form the circuit⇄pump graph.
+	keyCircuit = "CIRCUIT"
+	keyParent  = "PARENT"
+
 	condCircuit = "OBJTYP=CIRCUIT"
 	condBody    = "OBJTYP=BODY"
 	condPump    = "OBJTYP=PUMP"
 	condHeater  = "OBJTYP=HEATER"
+	condPMPCirc = "OBJTYP=PMPCIRC"
 
 	valueOff = "OFF"
 )
@@ -203,4 +209,5 @@ const (
 	KindPump    Kind = "pump"
 	KindHeater  Kind = "heater"
 	KindSensor  Kind = "sensor"
+	KindPMPCirc Kind = "pmpcirc" // PMPCIRC speed assignment (circuit⇄pump link); raw-only, no typed snapshot
 )

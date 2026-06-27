@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-26
+
+### Added
+- **Circuit status reflects physical pump delivery, not just command** - A circuit or feature that drives a pump now reports `circuit_status`/`feature_status` of `1` only when it is *commanded on AND* at least one pump it drives is actually running (RPM > 0). A circuit left on while its pump has no power (e.g. a popped breaker) now reads `0` instead of a falsely healthy `1`, so Grafana shows what is physically running. Circuits that drive no pump (lights, blowers) are unchanged. The circuit⇄pump relationship is read from IntelliCenter's `PMPCIRC` speed-assignment objects (`CIRCUIT`→`PARENT`), so it works with any equipment configuration — no equipment names or fixed circuit assumptions.
+- **Periodic static-config refresh** - The engine re-pulls IntelliCenter's static configuration (feature visibility and the circuit⇄pump graph) every 60 successful polls, so a reconfiguration is picked up without a restart or reconnect. Both fetches are lighter than a single equipment poll.
+
+### Changed
+- **`circuit_status` / `feature_status` semantics** - `1` (on) now requires physical pump delivery for circuits/features that drive a pump (see Added). HomeKit accessories are unaffected — they continue to reflect the controller's commanded state and the per-pump "Running" occupancy sensors (RPM > 0).
+
+### Documentation
+- **API.md: pump power/comms-loss behavior** - Documented the verified pump `STATUS` codes (`10`=running, `4`=stopped/no power), that the `ALARM` field does *not* track power loss (the outage SMS is a Pentair-cloud construct, absent from the local WebSocket), and the "demand without delivery" detection approach.
+
 ## [0.5.2] - 2026-06-21
 
 ### Changed
