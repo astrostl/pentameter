@@ -1458,7 +1458,7 @@ func newDiscoveryResolver(cfg *appConfig) func() (string, error) {
 	if !cfg.autoDiscover {
 		return nil
 	}
-	return func() (string, error) { return DiscoverIntelliCenter(false) }
+	return func() (string, error) { return DiscoverIntelliCenter(true) }
 }
 
 func resolveIntelliCenterIP(ip string) string {
