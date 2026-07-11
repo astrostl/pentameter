@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-11
+
+### Fixed
+- **A poll-only connection stall no longer hangs the engine indefinitely** - The engine holds two independent sockets per session: a poll/control connection and a push (unsolicited-broadcast) connection. Previously, only the push connection failing tore down a session and triggered reconnect-with-backoff; a poll connection that stayed open but stopped answering `GetParamList` (seen in the field: 113 minutes straight of poll timeouts while the push connection idled along, delivering only sporadic stale updates) had no way to force a reconnect on its own. `pollLoop` now ends the session after 3 consecutive poll failures, driving the same reconnect path, so a stuck poll socket alone now forces a fresh connection within a few poll intervals instead of waiting on the remote side to eventually reset the other socket too.
+- **Deadlock in connection teardown** - Fixing the above surfaced a latent deadlock: `Client.ReadMessage()` (the push connection's reader) held its mutex across an unbounded blocking read, and `Client.Close()` takes the same lock — so tearing down a session while the push connection was idly (but healthily) blocked waiting for the next message would hang forever. `ReadMessage` now releases the lock before blocking on the read.
+
 ## [0.6.0] - 2026-06-26
 
 ### Added
