@@ -256,6 +256,55 @@ type resolveError string
 
 func (e resolveError) Error() string { return string(e) }
 
+// TestEnginePollFailuresForceReconnect verifies a poll connection that stops
+// answering — while the push connection stays healthy — forces a reconnect
+// after maxConsecutivePollFailures, instead of retrying forever on the same
+// broken connection. Regression test for a field incident (2026-07-11): the
+// panel accepted the poll socket but never answered GetParamList for 113
+// minutes straight while the push socket idled along; nothing ended the
+// session until the panel itself reset the push socket too.
+func TestEnginePollFailuresForceReconnect(t *testing.T) {
+	mock := newEngineMock(t)
+	defer mock.close()
+	host, port, _ := strings.Cut(strings.TrimPrefix(mock.srv.URL, "http://"), ":")
+
+	e := NewEngine(host, port, 10*time.Millisecond) // fast poll so failures accumulate quickly
+
+	var sawScanErr, sawScanOKAfterErr atomic.Bool
+	e.OnScan = func(err error) {
+		if err != nil {
+			sawScanErr.Store(true)
+		} else if sawScanErr.Load() {
+			sawScanOKAfterErr.Store(true)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = e.Run(ctx) }()
+
+	// Baseline (condCircuit call #1) succeeds; exactly one req+push pair so far.
+	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
+	waitFor(t, func() bool { return mock.connCount() == 2 })
+
+	// Fail every poll after baseline (calls #2 through #1+maxConsecutivePollFailures):
+	// simulates the poll socket going unresponsive while the push socket is untouched.
+	mock.failCircuitLo.Store(2)
+	mock.failCircuitHi.Store(1 + maxConsecutivePollFailures)
+
+	// The engine must tear down and reconnect: two fresh connections beyond the
+	// original pair. Deadline generous enough to clear Run's reconnect backoff.
+	waitForTimeout(t, 6*time.Second, func() bool { return mock.connCount() >= 4 })
+	if !sawScanErr.Load() {
+		t.Error("expected OnScan to observe the poll failures before reconnect")
+	}
+
+	// The reconnected session's baseline (condCircuit call #(hi+1), outside the
+	// injected-failure range) succeeds again — real recovery, not just a
+	// reconnect loop that keeps failing.
+	waitForTimeout(t, 6*time.Second, sawScanOKAfterErr.Load)
+}
+
 // --- test helpers ---------------------------------------------------------
 
 func recvChange(t *testing.T, ch <-chan Change) Change {
@@ -296,7 +345,15 @@ func waitChange(t *testing.T, ch <-chan Change, pred func(Change) bool) Change {
 
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.After(3 * time.Second)
+	waitForTimeout(t, 3*time.Second, cond)
+}
+
+// waitForTimeout is waitFor with a caller-supplied deadline, for conditions
+// that must clear a fixed delay (e.g. Run's reconnect backoff) before they
+// can become true.
+func waitForTimeout(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.After(timeout)
 	for {
 		if cond() {
 			return
@@ -318,6 +375,13 @@ type engineMock struct {
 	lastReq     Request
 	cfgQueries  atomic.Int32 // GetConfiguration (feature visibility) calls
 	pmpcQueries atomic.Int32 // PMPCIRC (circuit⇄pump graph) calls
+
+	// circuitCalls counts condCircuit GetParamList calls (1-indexed); calls
+	// numbered within [failCircuitLo, failCircuitHi] (inclusive) get an error
+	// response instead of data, simulating a poll connection that stops
+	// answering. Zero values disable failure injection.
+	circuitCalls                 atomic.Int32
+	failCircuitLo, failCircuitHi atomic.Int32
 }
 
 type safeConn struct {
@@ -360,6 +424,13 @@ func (m *engineMock) handle(sc *safeConn, req Request) {
 	case "GetParamList":
 		if req.Condition == condPMPCirc {
 			m.pmpcQueries.Add(1)
+		}
+		if req.Condition == condCircuit {
+			n := m.circuitCalls.Add(1)
+			if lo, hi := m.failCircuitLo.Load(), m.failCircuitHi.Load(); lo > 0 && n >= lo && n <= hi {
+				sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "400"})
+				return
+			}
 		}
 		sc.writeJSON(Response{Command: req.Command, MessageID: req.MessageID, Response: "200", ObjectList: m.objectsFor(req)})
 	case "SetParamList":
@@ -421,3 +492,9 @@ func (m *engineMock) lastSet() Request {
 }
 
 func (m *engineMock) close() { m.srv.Close() }
+
+func (m *engineMock) connCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.conns)
+}

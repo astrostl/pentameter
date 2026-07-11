@@ -186,15 +186,24 @@ func (c *Client) Do(req Request) (*Response, error) {
 // ReadMessage reads the next message from the connection as a generic map,
 // without filtering. Listen-style consumers loop on this to observe unsolicited
 // push notifications. Blocks until a message arrives or the connection errors.
+//
+// Deliberately does not hold c.mu across the blocking read: this is the push
+// connection's sole reader (never shared with roundTrip's request/response
+// traffic, so no interleaving to guard against), and holding the lock here
+// would let a concurrent Close deadlock — Close can only unblock a pending
+// read by closing the underlying conn, which it can't reach while waiting on
+// the same lock ReadMessage is holding for the read's entire (potentially
+// unbounded) duration.
 func (c *Client) ReadMessage() (map[string]any, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
 		return nil, fmt.Errorf("not connected")
 	}
-	_ = c.conn.SetReadDeadline(time.Time{}) // block until a message arrives
+	_ = conn.SetReadDeadline(time.Time{}) // block until a message arrives
 	var msg map[string]any
-	if err := c.conn.ReadJSON(&msg); err != nil {
+	if err := conn.ReadJSON(&msg); err != nil {
 		return nil, fmt.Errorf("read message: %w", err)
 	}
 	return msg, nil

@@ -18,6 +18,13 @@ const (
 	// polls = 1h at the default 60s); both fetches are lighter than one equipment
 	// poll, so erring fast just means slightly fresher config.
 	configRefreshPolls = 60
+	// maxConsecutivePollFailures ends the session after this many consecutive
+	// poll failures, forcing Run's reconnect-with-backoff to dial a fresh
+	// connection. Guards against a poll socket that stays open but stops
+	// answering (seen in the field: the push socket kept idling along while
+	// GetParamList timed out for 113 minutes straight) — without this, only the
+	// push socket failing could ever end a session.
+	maxConsecutivePollFailures = 3
 )
 
 // Snapshot is the engine's current view of all known equipment, keyed by objnam.
@@ -341,38 +348,61 @@ func (e *Engine) session(ctx context.Context, req, push *Client) error {
 	e.onRawPoll(req, true)
 	e.logf("engine: connected to %s:%s (baseline complete)", e.host, e.port)
 
-	pollCtx, cancelPoll := context.WithCancel(ctx)
-	defer cancelPoll()
-	go e.pollLoop(pollCtx, req)
+	// pollLoop and pushLoop run on independent sockets (see Engine doc comment);
+	// either can end the session on its own. Whichever returns first wins: Run
+	// then closes both connections, which unblocks whichever loop is still
+	// running (pushLoop's ReadMessage has no deadline, so only a closed socket —
+	// not ctx cancellation — can unblock it) so its goroutine exits cleanly
+	// rather than leaking.
+	pollErr := make(chan error, 1)
+	go func() { pollErr <- e.pollLoop(ctx, req) }()
 
-	// Push loop runs in the foreground; returns when the stream errors or ctx ends.
-	return e.pushLoop(ctx, push)
+	pushErr := make(chan error, 1)
+	go func() { pushErr <- e.pushLoop(ctx, push) }()
+
+	select {
+	case err := <-pollErr:
+		return err
+	case err := <-pushErr:
+		return err
+	}
 }
 
-func (e *Engine) pollLoop(ctx context.Context, req *Client) {
+// pollLoop issues a full scan every pollEvery and returns an error once
+// maxConsecutivePollFailures consecutive scans have failed, ending the session
+// so Run reconnects with backoff. A poll socket that stays open but stops
+// answering (the panel accepts the connection but never responds to
+// GetParamList) would otherwise retry forever on the same broken connection,
+// since only pushLoop failing previously ended a session.
+func (e *Engine) pollLoop(ctx context.Context, req *Client) error {
 	ticker := time.NewTicker(e.pollEvery)
 	defer ticker.Stop()
-	// Runs in this single goroutine alongside scan(), so static-config refreshes
-	// reuse req without racing the connection. Counts only successful polls.
+	// Runs in its own goroutine, one call at a time (ticker-driven), so
+	// static-config refreshes reuse req without racing the connection.
 	pollsSinceConfig := 0
+	consecutiveFailures := 0
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			err := e.scan(req)
-			if err != nil {
-				e.logf("engine: poll error: %v", err)
-			}
 			e.onScan(err)
-			if err == nil {
-				e.onRawPoll(req, false)
-				pollsSinceConfig++
-				if pollsSinceConfig >= configRefreshPolls {
-					pollsSinceConfig = 0
-					e.loadConfig(req)       // best-effort: feature visibility
-					e.scanPumpCircuits(req) // best-effort: circuit⇄pump graph
+			if err != nil {
+				consecutiveFailures++
+				e.logf("engine: poll error (%d/%d consecutive): %v", consecutiveFailures, maxConsecutivePollFailures, err)
+				if consecutiveFailures >= maxConsecutivePollFailures {
+					return fmt.Errorf("poll: %d consecutive failures: %w", consecutiveFailures, err)
 				}
+				continue
+			}
+			consecutiveFailures = 0
+			e.onRawPoll(req, false)
+			pollsSinceConfig++
+			if pollsSinceConfig >= configRefreshPolls {
+				pollsSinceConfig = 0
+				e.loadConfig(req)       // best-effort: feature visibility
+				e.scanPumpCircuits(req) // best-effort: circuit⇄pump graph
 			}
 		}
 	}
