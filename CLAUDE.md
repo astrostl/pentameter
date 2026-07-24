@@ -108,17 +108,6 @@ The pentameter-app service uses `network_mode: "host"` for several important rea
 
 **Prometheus and Grafana**: These services remain on the bridge network (`pentameter-net`) since they don't need mDNS access and benefit from network isolation. They connect to pentameter via localhost on the host network.
 
-**mDNS Discovery Implementation Details:**
-
-The mDNS discovery code explicitly selects a network interface rather than using the default (`nil`) interface. This is critical for Docker containers:
-
-- **Interface Selection**: `getBestMulticastInterface()` finds the best available network interface
-- **Selection Criteria**: Prefers non-loopback, up interfaces with IPv4 addresses and multicast support
-- **Fallback Strategy**: If no ideal interface found, uses any multicast-capable interface
-- **Verbose Logging**: When discovery is enabled, logs which interface is selected for debugging
-
-This explicit interface selection is what makes mDNS work in Docker containers with host networking, where the default interface selection doesn't work reliably.
-
 ### After ANY Code Changes - MANDATORY STEPS:
 
 **⚠️ CRITICAL: ALWAYS USE MAKEFILE TARGETS FOR PENTAMETER DEBUGGING ⚠️**
@@ -182,43 +171,6 @@ docker logs pentameter-grafana
 ```
 
 **Remember: When code changes don't appear to work, it's usually Docker cache, not your code!**
-
-### Tool Versions
-
-The following tools are automatically installed with latest versions:
-- golangci-lint: @latest
-- gocyclo: @latest  
-- staticcheck: @latest
-- go-mod-outdated: @latest
-- ineffassign: @latest
-- misspell: @latest
-- govulncheck: @latest
-- gocritic: @latest
-- gosec: @latest
-
-### Target Organization
-
-**Build & Clean**: `build`, `build-static`, `clean`, `deps`
-**Testing**: `test`, `test-race`, `bench`
-**Quality Suites**: `dev` (build + quality), `quality` (CI-friendly warnings), `quality-strict` (enforced), `quality-enhanced` (includes race + bench), `quality-comprehensive` (maximum linter coverage)
-**Individual Quality Tools**: `fmt`, `check-fmt`, `lint`, `lint-enhanced`, `cyclo`, `vet`, `ineffassign`, `misspell`, `govulncheck`, `gocritic`, `gosec`, `staticcheck`
-**Dependency Management**: `modcheck`, `modverify`, `depcount`, `depoutdated`
-**Docker**: `docker-build` (nuclear by default), `docker-build-stack`, `compose-up`, `compose-down`, `compose-logs`, `compose-logs-once`
-
-### Quality Check Levels
-
-1. **`quality`** - Core checks with warnings (CI-friendly)
-2. **`quality-strict`** - All checks must pass (release builds)  
-3. **`quality-enhanced`** - Includes race detection, benchmarks, and staticcheck
-4. **`quality-comprehensive`** - Maximum linter coverage with enhanced analysis
-
-### Lint and Test Commands
-
-Run quality checks before committing:
-```bash
-make quality      # Quick check with warnings
-make dev         # Build + quality (full development cycle)
-```
 
 ### Debugging
 
@@ -345,12 +297,12 @@ When adding new monitoring capabilities, always ask: "How can this integrate sea
 
 The system uses consistent 1-minute (60-second) intervals across all components. There are four key interval settings:
 
-1. **Pentameter Polling Interval** (`main.go:32`): How often pentameter queries IntelliCenter
+1. **Pentameter Polling Interval** (`defaultPollInterval` in `main.go`): How often pentameter queries IntelliCenter
    ```go
    defaultPollInterval = 60  // seconds
    ```
 
-2. **Prometheus Scraping Interval** (`prometheus.yml:2,9`): How often Prometheus scrapes pentameter metrics
+2. **Prometheus Scraping Interval** (`scrape_interval` in `prometheus.yml` — both the `global` default and the `pentameter` job override): How often Prometheus scrapes pentameter metrics
    ```yaml
    global:
      scrape_interval: 60s
@@ -359,13 +311,13 @@ The system uses consistent 1-minute (60-second) intervals across all components.
        scrape_interval: 60s
    ```
 
-3. **Docker Health Check Interval** (`docker-compose.yml:17`): How often Docker checks pentameter health
+3. **Docker Health Check Interval** (`healthcheck.interval` on the `pentameter-app` service in `docker-compose.yml`): How often Docker checks pentameter health
    ```yaml
    healthcheck:
      interval: 60s
    ```
 
-4. **Prometheus Staleness Period** (`docker-compose.yml:41`): How long Prometheus retains metrics after they stop being emitted
+4. **Prometheus Staleness Period** (`--query.lookback-delta` on the `pentameter-prometheus` service in `docker-compose.yml`): How long Prometheus retains metrics after they stop being emitted
    ```yaml
    command:
      - '--query.lookback-delta=1m'
@@ -374,77 +326,6 @@ The system uses consistent 1-minute (60-second) intervals across all components.
 **To change intervals**: Update all four locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all four settings proportionally to maintain the 1:1:1:1 ratio for optimal metric freshness and cleanup behavior.
 
 ## Auto-Discovery - Finding IntelliCenter on Network
-
-### Overview
-
-Pentameter can automatically discover IntelliCenter controllers via mDNS (multicast DNS). The IntelliCenter broadcasts itself as `pentair.local` on the local network, allowing pentameter to find it without manual IP configuration.
-
-### Design Principles
-
-**Zero-Configuration Operation:**
-- No IP address required for basic operation
-- Automatic network discovery on startup
-- Falls back to manual IP if discovery fails or is disabled
-- Discovery timeout prevents indefinite waiting (60-second default with progress indicators every 2 seconds)
-
-**mDNS Discovery Implementation:**
-- Uses golang.org/x/net/ipv4 for multicast DNS queries
-- Queries for `pentair.local` hostname
-- Returns first valid IPv4 address found
-- Works on most home networks without configuration
-
-### Key Features
-
-1. **Automatic Discovery**: Finds IntelliCenter without user configuration
-2. **Fast Discovery**: Typical discovery time 1-5 seconds, timeout after 60 seconds
-3. **Progress Indicators**: Visible retry messages every 2 seconds during discovery
-4. **Manual Override**: `--ic-ip` flag bypasses discovery
-5. **Discovery Testing**: `--discover` flag shows IP and exits
-6. **Graceful Fallback**: Clear error messages with guidance on using `--ic-ip` flag if discovery fails
-
-### Implementation Notes
-
-**Discovery Flow:**
-```go
-// 1. Check if IP provided via flag or environment
-if icIP == "" {
-    // 2. Attempt mDNS discovery with 60-second timeout and progress indicators
-    discoveredIP, err := discoverIntelliCenter(60 * time.Second)
-    if err != nil {
-        // 3. Fail with helpful error message guiding users to --ic-ip flag
-        log.Fatalf("Could not discover IntelliCenter: %v\nUse --ic-ip flag to specify manually", err)
-    }
-    icIP = discoveredIP
-}
-```
-
-**Network Requirements:**
-- Multicast DNS (mDNS) must be enabled on network
-- UDP port 5353 must not be blocked
-- IntelliCenter and pentameter must be on same network segment
-- Some corporate/guest networks may block multicast traffic
-
-### Testing Discovery
-
-**Discovery Test Mode:**
-```bash
-# Test discovery and show IP address
-pentameter --discover
-# Output: IntelliCenter discovered at: 192.168.1.100
-
-# Test with timeout (future enhancement)
-pentameter --discover --timeout 10
-```
-
-**Manual IP Override:**
-```bash
-# Bypass discovery entirely
-pentameter --ic-ip 192.168.1.100
-
-# Via environment variable
-export PENTAMETER_IC_IP=192.168.1.100
-pentameter
-```
 
 ### Troubleshooting
 
@@ -459,19 +340,7 @@ pentameter
 - Slow network: up to 60 seconds with progress indicators every 2 seconds
 - Discovery shows visible retry attempts during network scanning
 
-### Future Enhancements
-
-Potential improvements for auto-discovery:
-- Configurable discovery timeout
-- Multiple IntelliCenter detection with selection
-- Discovery caching to avoid repeated lookups
-- mDNS service browsing for additional metadata
-
 ## Listen Mode - Live Equipment Monitoring
-
-### Overview
-
-Listen mode (`--listen` flag) provides real-time event monitoring for pool equipment changes using a hybrid push + poll architecture. It's designed for debugging, equipment discovery, and understanding IntelliCenter behavior.
 
 ### Design Principles
 
@@ -501,54 +370,6 @@ Listen mode (`--listen` flag) provides real-time event monitoring for pool equip
 - Reports `POLL: [no changes]` when a poll cycle finds no changes
 - Temperature changes show both old and new values for context
 
-### Key Features
-
-1. **Hybrid Push + Poll**: Real-time push notifications + periodic polling for comprehensive coverage
-2. **Source Identification**: `PUSH:` and `POLL:` prefixes distinguish event sources
-3. **Multi-Equipment Tracking**: Monitors circuits, pumps, temperatures, thermal equipment, and features simultaneously
-4. **Unknown Equipment Handling**: Logs equipment types not specifically implemented, using OBJTYP and basic status fields
-5. **Initial State Discovery**: Shows all equipment on startup with `POLL:` prefix
-6. **Operational State Visibility**: For thermal equipment, shows heating/cooling/off states, not just on/off
-
-### Implementation Architecture
-
-**Hybrid Architecture:**
-```go
-func (pm *PoolMonitor) StartEventListener(ctx context.Context, pollInterval time.Duration) {
-    // 1. Fetch initial state (logged as POLL:)
-    pm.GetTemperatures(ctx)
-
-    // 2. Create separate poller with its own connection
-    poller := &PoolMonitor{...}  // Shares state, separate websocket
-
-    // 3. Start parallel goroutines
-    go pm.pollLoop(ctx, poller, pollInterval)  // Polls every interval
-    pm.listenLoop(ctx)  // Blocks on push notifications
-}
-```
-
-**State Management:**
-```go
-type EquipmentState struct {
-    Circuits        map[string]CircuitState
-    Pumps           map[string]float64
-    Temps           map[string]float64
-    Thermal         map[string]ThermalState
-    Features        map[string]string
-    PollChangeCount int  // Track changes per poll cycle
-}
-```
-
-**Mutex Protection:**
-Both listener and poller access shared state - mutex ensures thread safety:
-```go
-pm.mu.Lock()
-pm.previousState.PollChangeCount = 0
-err := poller.GetTemperatures(ctx)
-changes := pm.previousState.PollChangeCount
-pm.mu.Unlock()
-```
-
 ### Configuration Behavior
 
 **Default Intervals:**
@@ -557,89 +378,3 @@ pm.mu.Unlock()
 - Normal mode: Defaults to 60-second polling interval
 - Intervals below 5 seconds are automatically raised to 5s with a warning
 
-**Listen Mode Detection:**
-```go
-// Check for listen mode from flag or environment variable
-listenMode := *listenFlag || os.Getenv("PENTAMETER_LISTEN") == "true"
-
-// In listen mode, use StartEventListener with hybrid push+poll
-if listenMode {
-    pm.StartEventListener(ctx, pollInterval)  // Push + periodic poll
-}
-```
-
-### Output Examples
-
-**Initial Discovery (via polling):**
-```
-2025/11/28 18:51:15 Fetching initial equipment state...
-2025/11/28 18:51:15 POLL: Pool temperature detected: 22.0°F
-2025/11/28 18:51:15 POLL: Spa temperature detected: 95.0°F
-2025/11/28 18:51:15 POLL: Air temperature detected: 36.0°F
-2025/11/28 18:51:15 POLL: VS detected: 3000 RPM
-2025/11/28 18:51:16 POLL: Pool detected: ON
-2025/11/28 18:51:16 POLL: Spa Heater detected: heating
-2025/11/28 18:51:35 Listening for real-time changes (Ctrl+C to stop)...
-```
-
-**Push Notification (real-time):**
-```
-2025/11/28 18:52:04 PUSH: Spa temp=97°F setpoint=98°F htmode=1 status=ON
-```
-
-**Poll Cycle (periodic):**
-```
-2025/11/28 18:53:35 POLL: Spa temperature changed: 95.0°F → 96.0°F
-2025/11/28 18:53:35 POLL: VS changed: 3000 → 2500 RPM
-2025/11/28 18:54:35 POLL: [no changes]
-```
-
-### Use Cases
-
-1. **Debugging Equipment Issues**: Watch real-time state changes when troubleshooting
-2. **Understanding IntelliCenter Behavior**: Learn how equipment responds to commands
-3. **Discovering Equipment Configuration**: Find all equipment in the system, including types not yet implemented
-4. **Testing New Features**: Verify equipment changes are detected correctly
-5. **Development**: Understand equipment behavior before implementing specific support
-6. **Pump Monitoring**: Track pump RPM changes that aren't pushed by IntelliCenter
-
-### Integration with Metrics Mode
-
-Listen mode and normal metrics mode are mutually compatible:
-- Both can run simultaneously (listen mode doesn't disable metrics collection)
-- Metrics continue to be exposed on HTTP port even in listen mode
-- Prometheus can scrape metrics while listen mode logs events
-- Use listen mode for debugging, normal mode for production monitoring
-
-### Testing Listen Mode
-
-**Quick Test:**
-```bash
-# Run with default 60s poll interval
-pentameter --ic-ip 192.168.1.100 --listen
-
-# Run with custom 10s poll interval
-pentameter --ic-ip 192.168.1.100 --listen --interval 10
-
-# Trigger equipment changes (turn lights on/off, adjust temperature setpoints)
-# PUSH: messages appear instantly, POLL: messages appear on poll cycles
-```
-
-**Docker Testing:**
-```bash
-# Override docker-compose.yml to enable listen mode
-docker run --rm --network host \
-  -e PENTAMETER_IC_IP=192.168.1.100 \
-  -e PENTAMETER_LISTEN=true \
-  -e PENTAMETER_INTERVAL=30 \
-  astrostl/pentameter:latest
-```
-
-### Future Enhancements
-
-Potential improvements for listen mode:
-- JSON output format for structured logging
-- WebSocket endpoint for real-time event streaming to web clients
-- Event filtering by equipment type or name
-- Configurable event history (show last N changes on startup)
-- Integration with external notification systems (webhooks, MQTT, etc.)
