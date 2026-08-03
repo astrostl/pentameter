@@ -31,6 +31,14 @@ This application must work with ANY IntelliCenter configuration, not just our sp
 
 **Remember: Other users have different equipment names, different circuit assignments, and different feature configurations. The code must work universally.**
 
+## Git Workflow - CRITICAL
+
+**Always work on `master` unless the user explicitly names another branch.**
+
+- Commit and push to `master` by default
+- Do **not** create topic branches, or commit/push leftover topic branches, without being asked
+- If the checkout is not `master` and the user did not request that branch, switch to `master` first and put the work there
+
 ## Build System
 
 This project uses a well-organized Makefile with pinned tool versions for reproducible builds.
