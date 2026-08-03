@@ -94,10 +94,8 @@ const (
 	objnamIncr       = "INCR"
 	objnamFreezeFeat = "_FEA2"
 
-	// Subtype / body-name values.
+	// Subtype values.
 	subtypGeneric = "GENERIC"
-	bodyNamePool  = "pool"
-	bodyNameSpa   = "spa"
 
 	// Thermal status description words.
 	statusWordOff     = "off"
@@ -232,8 +230,7 @@ var (
 type PoolMonitor struct {
 	lastRefresh            time.Time
 	ic                     *intellicenter.Client     // IntelliCenter transport + protocol
-	bodyHeatingStatus      map[string]bool           // Track which bodies are actively heating
-	referencedHeaters      map[string]BodyHeaterInfo // Track body-to-heater assignments
+	referencedHeaters      map[string]BodyHeaterInfo // Track body-to-heater assignments (body HTSRC)
 	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
 	circuitFreezeConfig    map[string]bool           // Track circuit objnam -> freeze protection enabled
 	circuitNames           map[string]string         // Track circuit/group objnam -> SNAME for display
@@ -285,7 +282,6 @@ type BodyHeaterInfo struct {
 func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) *PoolMonitor {
 	return &PoolMonitor{
 		ic:                     intellicenter.New(intelliCenterIP, intelliCenterPort),
-		bodyHeatingStatus:      make(map[string]bool),
 		referencedHeaters:      make(map[string]BodyHeaterInfo),
 		featureConfig:          make(map[string]string),
 		circuitFreezeConfig:    make(map[string]bool),
@@ -490,7 +486,6 @@ func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[s
 	hitmpStr := obj.Params[keyHITMP]
 
 	pm.processBodyTemperature(name, tempStr, subtype, status, obj)
-	pm.processBodyHeatingStatus(name, htmodeStr, obj.ObjName)
 	pm.processHeaterAssignment(name, tempStr, htmodeStr, htsrc, lotmpStr, hitmpStr, obj.ObjName, referencedHeaters)
 }
 
@@ -518,22 +513,6 @@ func (pm *PoolMonitor) processBodyTemperature(name, tempStr, subtype, status str
 	poolTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 	pm.trackWaterTemp(name, tempFahrenheit, obj)
 	pm.logChangedf("watertemp:"+obj.ObjName, "Updated temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
-}
-
-func (pm *PoolMonitor) processBodyHeatingStatus(name, htmodeStr, objName string) {
-	if htmodeStr == "" || name == "" {
-		return
-	}
-
-	htmode, err := strconv.Atoi(htmodeStr)
-	if err != nil {
-		log.Printf("Failed to parse HTMODE %s for %s: %v", htmodeStr, name, err)
-		return
-	}
-
-	// HTMODE >= 1 means heater is on (1=actively heating, 2=on but not heating)
-	pm.bodyHeatingStatus[strings.ToLower(name)] = htmode >= 1
-	pm.logChangedf("bodyheat:"+objName, "Updated body heating status: %s (%s) HTMODE=%d [%v]", name, objName, htmode, htmode >= 1)
 }
 
 func (pm *PoolMonitor) processHeaterAssignment(
@@ -782,55 +761,6 @@ func (pm *PoolMonitor) processVisibleFeature(obj ObjectData, name, status, subty
 }
 
 func (pm *PoolMonitor) calculateCircuitStatusValue(name, status, objName string, freezeEnabled bool) float64 {
-	isHeaterCircuit := strings.Contains(strings.ToLower(name), "heat")
-
-	if isHeaterCircuit {
-		return pm.getHeaterCircuitStatus(name, objName, freezeEnabled)
-	}
-
-	return pm.getRegularCircuitStatus(name, status, objName, freezeEnabled)
-}
-
-func (pm *PoolMonitor) getHeaterCircuitStatus(name, objName string, freezeEnabled bool) float64 {
-	bodyName := pm.getBodyNameFromCircuit(name)
-	statusValue := circuitStatusOff
-	statusDesc := statusDescOff
-
-	if bodyName != "" && pm.bodyHeatingStatus[bodyName] {
-		// Check if freeze protection is active and this circuit has freeze protection enabled
-		if pm.freezeProtectionActive && freezeEnabled {
-			statusValue = circuitStatusFreezeProtected
-			statusDesc = statusDescFreeze
-		} else {
-			statusValue = circuitStatusOn
-			statusDesc = statusDescOn
-		}
-	}
-
-	// Floor to OFF if commanded on but the pump(s) this circuit drives aren't running.
-	if gated := pm.applyPumpDeliveryGate(objName, statusValue); gated != statusValue {
-		statusValue = gated
-		statusDesc = statusDescPumpIdle
-	}
-
-	pm.logChangedf("circuit:"+objName, "Updated heater circuit status: %s (%s) = %s [%.0f] (Body: %s, Heating: %v)",
-		name, objName, statusDesc, statusValue, bodyName, pm.bodyHeatingStatus[bodyName])
-
-	return statusValue
-}
-
-func (pm *PoolMonitor) getBodyNameFromCircuit(name string) string {
-	lowerName := strings.ToLower(name)
-	if strings.Contains(lowerName, bodyNameSpa) {
-		return bodyNameSpa
-	}
-	if strings.Contains(lowerName, bodyNamePool) {
-		return bodyNamePool
-	}
-	return ""
-}
-
-func (pm *PoolMonitor) getRegularCircuitStatus(name, status, objName string, freezeEnabled bool) float64 {
 	statusValue := circuitStatusOff
 	statusDesc := statusDescOff
 
@@ -890,7 +820,6 @@ func (pm *PoolMonitor) getCircuitGroups() error {
 func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 	name := obj.Params[keySNAME]
 	subtype := obj.Params[keySUBTYP]
-	status := obj.Params[keySTATUS]
 
 	if name == "" || subtype == "" {
 		return
@@ -899,18 +828,16 @@ func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 	var heaterStatusValue int
 	var statusDescription string
 
-	// Check if this heater is referenced by a body
+	// Heat status comes only from body HTSRC + HTMODE (objective). A heater that
+	// is not any body's current heat source is off — never inferred from SNAME.
 	bodyInfo, isReferenced := pm.referencedHeaters[obj.ObjName]
 	if isReferenced {
-		// Use body operational data for referenced heaters
 		heaterStatusValue = pm.calculateHeaterStatus(&bodyInfo, subtype)
 		statusDescription = fmt.Sprintf("%s (Body: %s, HTMODE: %d)",
 			pm.getStatusDescription(heaterStatusValue), bodyInfo.BodyName, bodyInfo.HTMode)
 	} else {
-		// For non-referenced heaters, determine status by name matching with body heating status
-		heaterStatusValue = pm.calculateHeaterStatusFromName(name, status)
-		statusDescription = fmt.Sprintf("%s (Non-referenced, inferred from body status)",
-			pm.getStatusDescription(heaterStatusValue))
+		heaterStatusValue = thermalStatusOff
+		statusDescription = pm.getStatusDescription(heaterStatusValue) + " (not current heat source)"
 	}
 
 	// Update Prometheus metric
@@ -959,29 +886,6 @@ func (pm *PoolMonitor) calculateHeaterStatus(bodyInfo *BodyHeaterInfo, _ string)
 	default:
 		return thermalStatusOff // Unknown mode, treat as off
 	}
-}
-
-func (pm *PoolMonitor) calculateHeaterStatusFromName(heaterName, status string) int {
-	// For non-referenced heaters, try to match with body heating status
-	// Look for body names that might be associated with this heater
-	heaterNameLower := strings.ToLower(heaterName)
-
-	// Check if any body is currently heating and matches this heater's name
-	for bodyName, isHeating := range pm.bodyHeatingStatus {
-		if strings.Contains(heaterNameLower, bodyName) || strings.Contains(bodyName, heaterNameLower) {
-			if isHeating {
-				return thermalStatusHeating // Heating
-			}
-			return thermalStatusOff // Off
-		}
-	}
-
-	// If no body match found, use the heater's own status if available
-	if status == statusOn {
-		return thermalStatusHeating // Heating
-	}
-
-	return thermalStatusOff // Off
 }
 
 func (pm *PoolMonitor) getStatusDescription(status int) string {

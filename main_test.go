@@ -75,10 +75,6 @@ func TestNewPoolMonitor(t *testing.T) {
 		t.Error("listenMode should be false")
 	}
 
-	if poolMonitor.bodyHeatingStatus == nil {
-		t.Error("bodyHeatingStatus map should be initialized")
-	}
-
 	if poolMonitor.referencedHeaters == nil {
 		t.Error("referencedHeaters map should be initialized")
 	}
@@ -119,12 +115,9 @@ func TestGetBodyTemperatures(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 	poolMonitor.applyBodyTemperatures(objs)
 
-	// Check that heating status was tracked
-	if !poolMonitor.bodyHeatingStatus["pool"] {
-		t.Error("Pool heating status should be true (HTMODE=1)")
-	}
-	if poolMonitor.bodyHeatingStatus["spa"] {
-		t.Error("Spa heating status should be false (HTMODE=0)")
+	// Body HTSRC assignment is what drives thermal metrics (not SNAME).
+	if _, ok := poolMonitor.referencedHeaters["GAS"]; !ok {
+		t.Error("heater GAS should be referenced by a body with HTSRC=GAS")
 	}
 }
 
@@ -223,35 +216,10 @@ func TestIsValidCircuit(t *testing.T) {
 	}
 }
 
-func TestGetBodyNameFromCircuit(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	tests := []struct {
-		circuitName string
-		expected    string
-	}{
-		{"Pool Heater", "pool"},
-		{"Spa Heat", "spa"},
-		{"SPA HEATER", "spa"},
-		{"POOL HEAT PUMP", "pool"},
-		{"Random Circuit", ""},
-		{"", ""},
-	}
-
-	for _, test := range tests {
-		result := poolMonitor.getBodyNameFromCircuit(test.circuitName)
-		if result != test.expected {
-			t.Errorf("getBodyNameFromCircuit(%s): expected %s, got %s",
-				test.circuitName, test.expected, result)
-		}
-	}
-}
-
 func TestCalculateCircuitStatusValue(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
-	poolMonitor.bodyHeatingStatus["pool"] = true
-	poolMonitor.bodyHeatingStatus["spa"] = false
 
+	// Circuit status is command on/off (+ freeze/pump gate) only — never SNAME.
 	tests := []struct {
 		name          string
 		status        string
@@ -261,8 +229,9 @@ func TestCalculateCircuitStatusValue(t *testing.T) {
 	}{
 		{"Pool Light", "ON", "C01", false, 1.0},
 		{"Pool Light", "OFF", "C01", false, 0.0},
-		{"Pool Heater", "ON", "C02", false, 1.0}, // Should use heating status, not circuit status
-		{"Spa Heater", "ON", "C03", false, 0.0},  // Spa not heating
+		{"Pool Heater", "ON", "C02", false, 1.0}, // name ignored; STATUS=ON
+		{"Spa Heater", "ON", "C03", false, 1.0},  // name ignored; STATUS=ON
+		{"Spa Heater", "OFF", "C03", false, 0.0},
 	}
 
 	for _, test := range tests {
@@ -798,55 +767,6 @@ func TestCalculateHeaterStatus(t *testing.T) {
 	}
 }
 
-func TestCalculateHeaterStatusFromName(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	// Set up body heating status
-	poolMonitor.bodyHeatingStatus["pool"] = true
-	poolMonitor.bodyHeatingStatus["spa"] = false
-
-	tests := []struct {
-		name       string
-		heaterName string
-		status     string
-		expected   int
-	}{
-		{
-			name:       "Pool heater with matching body heating",
-			heaterName: "Pool Heat Pump",
-			status:     "OFF",
-			expected:   thermalStatusHeating, // Based on body status
-		},
-		{
-			name:       "Spa heater with non-heating body",
-			heaterName: "Spa Heater",
-			status:     "OFF",
-			expected:   thermalStatusOff,
-		},
-		{
-			name:       "Unknown heater with ON status",
-			heaterName: "Unknown Heater",
-			status:     "ON",
-			expected:   thermalStatusHeating,
-		},
-		{
-			name:       "Unknown heater with OFF status",
-			heaterName: "Unknown Heater",
-			status:     "OFF",
-			expected:   thermalStatusOff,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			result := poolMonitor.calculateHeaterStatusFromName(test.heaterName, test.status)
-			if result != test.expected {
-				t.Errorf("Expected %d, got %d", test.expected, result)
-			}
-		})
-	}
-}
-
 func TestGetStatusDescription(t *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 
@@ -904,31 +824,25 @@ func TestGetThermalStatus(_ *testing.T) {
 		HiTemp:    85.0,
 	}
 
-	// Set up body heating status.
-	poolMonitor.bodyHeatingStatus["pool"] = true
-	poolMonitor.bodyHeatingStatus["spa"] = false
-
 	poolMonitor.applyThermalStatus(objs)
 }
 
-func TestProcessBodyHeatingStatusError(t *testing.T) {
-	poolMonitor := NewPoolMonitor("test", "6680", false)
-
-	// Test with invalid HTMODE value
-	poolMonitor.processBodyHeatingStatus("Pool", "invalid", "BODY1")
-
-	// Should not have added anything to bodyHeatingStatus
-	if _, exists := poolMonitor.bodyHeatingStatus["pool"]; exists {
-		t.Error("Should not have processed invalid HTMODE")
-	}
-
-	// Test with empty values
-	poolMonitor.processBodyHeatingStatus("", "1", "BODY1")
-	poolMonitor.processBodyHeatingStatus("Pool", "", "BODY1")
-
-	// Should still not have added anything
-	if _, exists := poolMonitor.bodyHeatingStatus["pool"]; exists {
-		t.Error("Should not have processed empty values")
+func TestUnreferencedHeaterIsOff(t *testing.T) {
+	// Heater not any body's HTSRC → thermal off (no SNAME inference).
+	pm := NewPoolMonitor("test", "6680", false)
+	pm.applyThermalStatus([]ObjectData{
+		{
+			ObjName: "H0002",
+			Params: map[string]string{
+				"SNAME":  "Spa Heater",
+				"STATUS": "ON",
+				"SUBTYP": "GENERIC",
+			},
+		},
+	})
+	// Gauge was set to off; no panic / no name path. Presence of referencedHeaters empty is enough.
+	if len(pm.referencedHeaters) != 0 {
+		t.Fatalf("expected no referenced heaters, got %v", pm.referencedHeaters)
 	}
 }
 

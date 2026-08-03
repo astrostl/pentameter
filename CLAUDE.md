@@ -295,7 +295,7 @@ When adding new monitoring capabilities, always ask: "How can this integrate sea
 
 ### Polling and Scraping Intervals
 
-The system uses consistent 1-minute (60-second) intervals across all components. There are four key interval settings:
+The system uses consistent 1-minute (60-second) intervals across all components. There are three key interval settings:
 
 1. **Pentameter Polling Interval** (`defaultPollInterval` in `main.go`): How often pentameter queries IntelliCenter
    ```go
@@ -311,19 +311,13 @@ The system uses consistent 1-minute (60-second) intervals across all components.
        scrape_interval: 60s
    ```
 
-3. **Docker Health Check Interval** (`healthcheck.interval` on the `pentameter-app` service in `docker-compose.yml`): How often Docker checks pentameter health
-   ```yaml
-   healthcheck:
-     interval: 60s
-   ```
-
-4. **Prometheus Staleness Period** (`--query.lookback-delta` on the `pentameter-prometheus` service in `docker-compose.yml`): How long Prometheus retains metrics after they stop being emitted
+3. **Prometheus Staleness Period** (`--query.lookback-delta` on the `pentameter-prometheus` service in `docker-compose.yml`): How long Prometheus retains metrics after they stop being emitted
    ```yaml
    command:
      - '--query.lookback-delta=1m'
    ```
 
-**To change intervals**: Update all four locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all four settings proportionally to maintain the 1:1:1:1 ratio for optimal metric freshness and cleanup behavior.
+**To change intervals**: Update all three locations to maintain consistency. The docker-compose.yml also sets the default via `PENTAMETER_INTERVAL=${PENTAMETER_INTERVAL:-60}` which should match the main.go default. When changing to different intervals (e.g., 5 minutes), update all three settings proportionally to maintain the 1:1:1 ratio for optimal metric freshness and cleanup behavior.
 
 ## Auto-Discovery - Finding IntelliCenter on Network
 
