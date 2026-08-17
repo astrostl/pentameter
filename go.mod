@@ -6,7 +6,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
-	golang.org/x/net v0.57.0
+	golang.org/x/net v0.58.0
 )
 
 require (
