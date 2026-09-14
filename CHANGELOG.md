@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-13
+
+### Changed
+- **Heat status is now derived only from IntelliCenter's own operational data, never from equipment names** - Circuit and heater heat state previously fell back on name heuristics: any circuit whose name contained "heat" was treated as a heater circuit, its body was guessed by looking for the substrings "pool"/"spa" in that name, and a heater not referenced by any body had its status inferred by fuzzy-matching its name against body names. All of it is gone. Every circuit now derives `circuit_status` from `STATUS` (plus freeze protection and the pump-delivery gate), and heater status comes solely from the body's `HTSRC` + `HTMODE`. This is the universal-compatibility rule applied to the one place that still violated it — the previous behavior only worked for pools whose equipment happened to be named in English along those lines.
+- **A heater that is not any body's current heat source now reports off** - Following from the above, such a heater reports `0` ("not current heat source") instead of a status inferred from its name or its own `STATUS`. If you had a heater reading `1` while it was not the active `HTSRC`, that value was a name-based guess and will now read `0`.
+
+### Fixed
+- **Removed a Docker healthcheck that could never pass** - The `pentameter-app` healthcheck shelled out to `wget` against `/health`, but the image is built `FROM scratch` — no shell, no wget — so the check failed every time and the container sat permanently unhealthy. Dropped rather than replaced.
+
+### Dependencies
+- Bump `github.com/prometheus/client_golang` from 1.23.2 to 1.24.1
+- Bump `github.com/prometheus/client_model` from 0.6.2 to 0.6.3
+- Bump `golang.org/x/net` from 0.56.0 to 0.58.0
+
 ## [0.6.1] - 2026-07-11
 
 ### Fixed
