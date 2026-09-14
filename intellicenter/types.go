@@ -46,9 +46,9 @@ type Request struct {
 
 // Object is one entry in a request/response objectList.
 type Object struct {
+	Params  map[string]string `json:"params,omitempty"`
 	ObjName string            `json:"objnam"`
 	Keys    []string          `json:"keys,omitempty"`
-	Params  map[string]string `json:"params,omitempty"`
 }
 
 // Response is an IntelliCenter reply (or unsolicited push).
@@ -61,8 +61,8 @@ type Response struct {
 
 // ObjectData is one object's params in a response.
 type ObjectData struct {
-	ObjName string            `json:"objnam"`
 	Params  map[string]string `json:"params"`
+	ObjName string            `json:"objnam"`
 }
 
 // --- domain types --------------------------------------------------------
@@ -82,12 +82,12 @@ type Circuit struct {
 type Body struct {
 	ID        string
 	Name      string  // SNAME
-	On        bool    // STATUS == "ON"
+	HeaterID  string  // HTSRC (assigned heater objnam)
 	Temp      float64 // TEMP (current water temp)
 	HeatMode  int     // HTMODE (0 off, 1 heat, 4 HP heat, 9 HP cool)
-	HeaterID  string  // HTSRC (assigned heater objnam)
 	LoSetTemp float64 // LOTMP (heat setpoint)
 	HiSetTemp float64 // HITMP (cool setpoint)
+	On        bool    // STATUS == "ON"
 }
 
 // Pump is a pump (objnam PMP##). Watts/GPM are poll-only (never pushed).
@@ -109,9 +109,9 @@ type Pump struct {
 type Heater struct {
 	ID      string
 	Name    string // SNAME
-	On      bool   // STATUS == "ON"
 	SubType string // SUBTYP (ULTRA = heat pump, GENERIC = gas, SOLAR)
 	Body    string // BODY: space-separated body IDs this heater serves
+	On      bool   // STATUS == "ON"
 	Cool    bool   // COOL == "ON" (heat pump cooling capability)
 	// Real distinguishes a configured heater device from a "Preferred"/combo
 	// pseudo-object (e.g. HXULT), whose params echo their own key names. A real

@@ -199,9 +199,9 @@ func (e *Engine) Snapshot() Snapshot {
 // that need the full param set (e.g. metrics interpretation) sweep RawObjects
 // rather than the typed Snapshot.
 type RawObject struct {
+	Params  map[string]string
 	ObjName string
 	Kind    Kind
-	Params  map[string]string
 }
 
 // RawObjects returns a deep copy of every tracked object's merged raw params.
@@ -649,8 +649,8 @@ func (e *Engine) reparseLocked(kind Kind, objnam string, params map[string]strin
 // --- push message parsing -------------------------------------------------
 
 type pushObject struct {
-	objnam string
 	params map[string]string
+	objnam string
 }
 
 // extractPushObjects pulls {objnam, params} pairs out of an IntelliCenter push.

@@ -107,6 +107,22 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	waitFor(t, func() bool { return e.Snapshot().Circuits["C0001"].Name == "Pool Light" })
 	waitFor(t, sawScanOK.Load)
 	waitFor(t, sawBaselinePoll.Load)
+
+	// The phases run in order against one live engine: each asserts a distinct
+	// capability (snapshot, config, raw objects, control, push) and is split out
+	// so no single function carries the whole scenario's branching.
+	assertBaselineSnapshot(t, e)
+	assertConfigLoaded(t, e)
+	assertRawObjects(t, e)
+	assertControlWrite(t, e, mock)
+	assertPushApplied(t, e, mock, ch)
+	// The raw push hook saw the unsolicited message verbatim.
+	waitFor(t, sawRawPush.Load)
+}
+
+// assertBaselineSnapshot checks the baseline poll populated bodies and sensors.
+func assertBaselineSnapshot(t *testing.T, e *Engine) {
+	t.Helper()
 	snap := e.Snapshot()
 	if snap.Bodies["B1101"].Temp != 82 || !snap.Sensors[airSensorObjnam].Valid {
 		t.Fatalf("baseline snapshot incomplete: %+v", snap)
@@ -114,8 +130,11 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	if snap.Sensors[airSensorObjnam].SubType != "AIR" {
 		t.Errorf("sensor subtype not captured: %+v", snap.Sensors[airSensorObjnam])
 	}
+}
 
-	// GetConfiguration ran at baseline → feature visibility loaded.
+// assertConfigLoaded checks GetConfiguration ran at baseline → feature visibility loaded.
+func assertConfigLoaded(t *testing.T, e *Engine) {
+	t.Helper()
 	cfg := e.Config()
 	if cfg["FTR01"] != "hide w" || cfg["FTR02"] != "hide" {
 		t.Errorf("config not loaded: %+v", cfg)
@@ -123,8 +142,11 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	if !ShouldShowFeature(cfg["FTR01"]) || ShouldShowFeature(cfg["FTR02"]) {
 		t.Errorf("visibility wrong: FTR01=%v FTR02=%v", cfg["FTR01"], cfg["FTR02"])
 	}
+}
 
-	// RawObjects exposes merged params + kind for full-fidelity sweeps.
+// assertRawObjects checks RawObjects exposes merged params + kind for full-fidelity sweeps.
+func assertRawObjects(t *testing.T, e *Engine) {
+	t.Helper()
 	raw := map[string]RawObject{}
 	for _, o := range e.RawObjects() {
 		raw[o.ObjName] = o
@@ -135,8 +157,11 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 	if b := raw["B1101"]; b.Kind != KindBody || b.Params["HTSRC"] != "H0001" || b.Params["LOTMP"] != "85" {
 		t.Errorf("raw body wrong: %+v", b)
 	}
+}
 
-	// Control: a write reaches IntelliCenter as a SetParamList.
+// assertControlWrite checks a write reaches IntelliCenter as a SetParamList.
+func assertControlWrite(t *testing.T, e *Engine, mock *engineMock) {
+	t.Helper()
 	if err := e.SetCircuit("C0001", false); err != nil {
 		t.Fatalf("SetCircuit: %v", err)
 	}
@@ -145,22 +170,25 @@ func TestEngineRunBaselineControlPush(t *testing.T) {
 		return s.Command == "SetParamList" && len(s.ObjectList) == 1 &&
 			s.ObjectList[0].ObjName == "C0001" && s.ObjectList[0].Params["STATUS"] == "OFF"
 	})
+}
 
-	// Push: an unsolicited WriteParamList flips C0001 and the engine emits it.
+// assertPushApplied checks an unsolicited WriteParamList flips C0001 and the engine emits it.
+func assertPushApplied(t *testing.T, e *Engine, mock *engineMock, ch <-chan Change) {
+	t.Helper()
 	mock.broadcast(map[string]any{
 		"command": "WriteParamList",
 		"objectList": []any{
 			map[string]any{"objnam": "C0001", "params": map[string]any{"STATUS": "OFF"}},
 		},
 	})
-	if c := waitChange(t, ch, func(c Change) bool { return c.Circuit != nil && c.Circuit.ID == "C0001" && !c.Circuit.On }); c.Circuit == nil {
+	if c := waitChange(t, ch, func(c Change) bool {
+		return c.Circuit != nil && c.Circuit.ID == "C0001" && !c.Circuit.On
+	}); c.Circuit == nil {
 		t.Fatal("did not receive expected circuit-off change from push")
 	}
 	if e.Snapshot().Circuits["C0001"].On {
 		t.Error("snapshot should reflect pushed OFF state")
 	}
-	// The raw push hook saw the unsolicited message verbatim.
-	waitFor(t, sawRawPush.Load)
 }
 
 // TestEnginePMPCircBaselineAndRefresh verifies the circuit⇄pump graph is fetched

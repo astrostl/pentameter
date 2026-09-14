@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -517,7 +518,7 @@ func TestMetricsServerBindAndServe(t *testing.T) {
 
 	// Port "0" lets the OS pick a free port, so the test never collides with a
 	// real metrics server or another test.
-	ln, err := bindMetricsServer(registry, monitor, "0")
+	ln, err := bindMetricsServer(context.Background(), registry, monitor, "0")
 	if err != nil {
 		t.Fatalf("bindMetricsServer should succeed on a free port: %v", err)
 	}
@@ -528,7 +529,12 @@ func TestMetricsServerBindAndServe(t *testing.T) {
 	served := make(chan error, 1)
 	go func() { served <- serveMetrics(ln) }()
 
-	resp, err := http.Get("http://" + ln.Addr().String() + "/health")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		"http://"+ln.Addr().String()+"/health", http.NoBody)
+	if err != nil {
+		t.Fatalf("building /health request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /health failed: %v", err)
 	}

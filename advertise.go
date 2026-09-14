@@ -37,11 +37,11 @@ const (
 
 // MDNSAdvertiser responds to mDNS queries for pentameter's service.
 type MDNSAdvertiser struct {
-	ip       net.IP
-	httpPort uint16
 	conn     *net.UDPConn
 	pconn    *ipv4.PacketConn
 	iface    *net.Interface
+	ip       net.IP
+	httpPort uint16
 }
 
 // StartMDNSAdvertiser starts an mDNS responder that advertises pentameter on the network.
@@ -113,7 +113,7 @@ func listenMDNS(iface *net.Interface) (*net.UDPConn, *ipv4.PacketConn, error) {
 	// Set the outgoing multicast interface so responses go out on the right NIC.
 	if iface != nil {
 		if err := pconn.SetMulticastInterface(iface); err != nil {
-			conn.Close()
+			_ = conn.Close() // already failing; the close error adds nothing
 			return nil, nil, fmt.Errorf("failed to set multicast interface: %w", err)
 		}
 	}
@@ -121,7 +121,7 @@ func listenMDNS(iface *net.Interface) (*net.UDPConn, *ipv4.PacketConn, error) {
 	// Enable multicast loopback so local clients (e.g. dns-sd, avahi-browse
 	// running on the same host) can see our responses.
 	if err := pconn.SetMulticastLoopback(true); err != nil {
-		conn.Close()
+		_ = conn.Close() // already failing; the close error adds nothing
 		return nil, nil, fmt.Errorf("failed to enable multicast loopback: %w", err)
 	}
 

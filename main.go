@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -237,13 +238,13 @@ type PoolMonitor struct {
 	activeCircuitKeys      map[string]bool           // Track active circuit metric keys for stale cleanup
 	activeFeatureKeys      map[string]bool           // Track active feature metric keys for stale cleanup
 	previousState          *EquipmentState           // Previous state for change detection
-	mu                     sync.Mutex                // Protects concurrent access in listen mode
 	lastLogged             map[string]string         // Last "Updated ..." line logged per object key; gates change-only logging
+	pumpRunning            map[string]bool           // pump objnam -> actually running (RPM>0); rebuilt each refresh
+	circuitToPumps         map[string][]string       // driven circuit/feature objnam -> pump objnams (from PMPCIRC); rebuilt each refresh
+	mu                     sync.Mutex                // Protects concurrent access in listen mode
 	listenMode             bool                      // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool                      // Track if initial poll completed (suppresses "detected" logs after first poll)
 	freezeProtectionActive bool                      // Track if freeze protection is currently active
-	pumpRunning            map[string]bool           // pump objnam -> actually running (RPM>0); rebuilt each refresh
-	circuitToPumps         map[string][]string       // driven circuit/feature objnam -> pump objnams (from PMPCIRC); rebuilt each refresh
 }
 
 // CircGrpState tracks the state of a circuit group member.
@@ -947,14 +948,14 @@ func getEnvOrDefault(envVar, defaultValue string) string {
 // transitions appear. Silent in listen mode, which has its own raw change feed.
 // This gates console logging ONLY: Prometheus gauges are Set() separately and
 // unconditionally on every poll, so /metrics and Grafana are unaffected.
-func (pm *PoolMonitor) logChangedf(key, format string, v ...interface{}) {
+func (pm *PoolMonitor) logChangedf(key, format string, args ...interface{}) {
 	if pm.listenMode {
 		return
 	}
 	if pm.lastLogged == nil {
 		pm.lastLogged = make(map[string]string)
 	}
-	msg := fmt.Sprintf(format, v...)
+	msg := fmt.Sprintf(format, args...)
 	if pm.lastLogged[key] == msg {
 		return
 	}
@@ -1506,7 +1507,7 @@ func createPrometheusRegistry() *prometheus.Registry {
 // treats a bind failure as fatal (serving metrics is the whole job); homebridge
 // mode logs it and carries on, so a port conflict on the secondary metrics
 // endpoint never takes down HomeKit.
-func bindMetricsServer(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) (net.Listener, error) {
+func bindMetricsServer(ctx context.Context, registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) (net.Listener, error) {
 	http.Handle("/metrics", createMetricsHandler(registry, monitor))
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -1515,7 +1516,12 @@ func bindMetricsServer(registry *prometheus.Registry, monitor *PoolMonitor, http
 		}
 	})
 
-	return net.Listen("tcp", ":"+httpPort)
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", ":"+httpPort)
+	if err != nil {
+		return nil, fmt.Errorf("binding metrics listener on port %s: %w", httpPort, err)
+	}
+	return listener, nil
 }
 
 func main() {
@@ -1555,7 +1561,7 @@ func serveMetrics(ln net.Listener) error {
 	// when the listener itself is closed; both are graceful stops, not failures.
 	if err := server.Serve(ln); err != nil &&
 		!errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-		return err
+		return fmt.Errorf("serving metrics: %w", err)
 	}
 	return nil
 }

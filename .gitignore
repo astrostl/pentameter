@@ -45,3 +45,5 @@ coverage.out
 # Build artifacts
 dist/
 build/
+# make quality failure marker
+.quality-failures

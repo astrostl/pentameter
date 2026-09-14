@@ -4,6 +4,22 @@
 
 If any command returns an error or fails quality checks, STOP the release process immediately. Fix the issue, commit the fix, and restart from step 1.
 
+**⚠️ CRITICAL: STOP AND ASK — NEVER AUTO-PROCEED PAST AN ISSUE ⚠️**
+
+This applies at *every* point in the release, from the pre-release checks through post-release verification. If anything at all is off — a failing command, a failing or crashing linter, a test failure, an unexpected warning, a checksum that doesn't match, a version string that looks wrong, a manifest entry you didn't expect — **stop and ask the user what to do. Do not decide on your own that it is safe to continue.**
+
+Specifically, do NOT proceed on any of the following reasoning:
+
+- "This failure is pre-existing — it was already failing at the last release."
+- "This is environmental / a tool-version mismatch, not the project's code."
+- "This is only a warning, and the target still reported success."
+- "This is in test code, not shipped code."
+- "This is unrelated to what's in this release."
+
+Every one of those may well be true, and the user may agree the release should go ahead anyway — **but that is the user's call, not yours.** Report what failed, what you believe the cause is, and what you'd recommend, then wait for an explicit answer before running the next step.
+
+Once the user has ruled on a specific issue, that ruling holds for the rest of that release; you do not need to re-ask about the same failure at a later step. A *new* or *different* issue requires a new question.
+
 **⚠️ CRITICAL: NEVER CREATE RELEASES WITHOUT EXPLICIT USER APPROVAL ⚠️**
 
 All release creation (git tags, version bumps, DockerHub publishing) requires explicit user direction. Never create releases proactively or as troubleshooting attempts.
@@ -34,6 +50,10 @@ Before starting the release process, ensure:
    - Update `README.md` if new features require documentation
    - Update `CLAUDE.md` if process documentation needs changes
    - Commit and push documentation updates BEFORE creating the release tag
+
+4. **Quality Checks Pass**
+   - Run `make quality` and read the full output, not just the final summary line — the target can print `✓ Core quality checks completed!` while individual linters have failed above it
+   - Any test failure, linter failure or crash, or unexpected warning is an issue: stop and ask the user (see the STOP AND ASK banner at the top) rather than deciding it is benign
 
 ## Release Process
 
@@ -326,6 +346,7 @@ curl -s https://goreportcard.com/report/github.com/astrostl/pentameter
 Use this checklist to track progress:
 
 - [ ] Working directory is clean (`git status`)
+- [ ] `make quality` output reviewed in full; any issue raised with the user and explicitly ruled on
 - [ ] Documentation updated (CHANGELOG.md, README.md)
 - [ ] Dockerfile copies all necessary source files
 - [ ] Documentation committed and pushed

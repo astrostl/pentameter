@@ -11,6 +11,14 @@ LATEST_TAG ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0
 # Auto-detect docker command - can be overridden with: make DOCKER_CMD=docker <target>
 DOCKER_CMD ?= $(shell command -v nerdctl >/dev/null 2>&1 && echo nerdctl || echo docker)
 
+# Records which sub-checks failed during `make quality` so every check still
+# runs (rather than stopping at the first failure) but the target as a whole
+# exits non-zero instead of printing a success line over the top of them.
+QUALITY_FAILFILE := .quality-failures
+
+# Pinned tool versions (reproducible builds)
+GOLANGCI_VERSION ?= v2.13.2
+
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
@@ -19,7 +27,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 
-.PHONY: all build build-static build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula clean deps test test-race bench docker-build docker-build-stack docker-flush lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
+.PHONY: all build build-static build-macos-binaries package-macos-binaries generate-macos-checksums update-homebrew-formula clean deps test test-race bench docker-build docker-build-stack docker-flush tools-refresh ensure-golangci-lint lint lint-enhanced fmt check-fmt gofumpt check-gofumpt cyclo staticcheck vet ineffassign misspell govulncheck modcheck gocritic gosec betteralign fieldalignment goleak go-licenses modverify depcount depoutdated dev help quality quality-strict quality-enhanced quality-comprehensive compose-up compose-down compose-logs compose-logs-once docker-tag docker-push docker-push-single docker-manifest docker-release release
 
 # Default target - show help
 all: help
@@ -119,20 +127,36 @@ check-gofumpt:
 	}
 	@export PATH=$$PATH:$$(go env GOPATH)/bin && test -z "$$(gofumpt -l .)" || (echo "Code is not formatted with gofumpt. Run 'make gofumpt' to fix." && exit 1)
 
+# Ensure golangci-lint is the pinned version AND was compiled by the Go
+# toolchain in use here.
+#
+# golangci-lint does not shell out for typechecking - it links go/types from
+# the toolchain it was COMPILED with. A binary built by an older Go therefore
+# cannot typecheck a newer stdlib: it fails inside the standard library (e.g.
+# "could not import math/rand/v2") and aborts before running a single linter,
+# so `make lint` reports a failure that has nothing to do with this project's
+# code. A plain `command -v` presence check never catches this, because the
+# stale binary is present and merely wrong. Reinstall whenever either the tool
+# version or the building Go version drifts.
+ensure-golangci-lint:
+	@export PATH=$$PATH:$$(go env GOPATH)/bin; \
+	want_ver="$(patsubst v%,%,$(GOLANGCI_VERSION))"; \
+	want_go="$$(go env GOVERSION)"; \
+	have="$$(golangci-lint --version 2>/dev/null || true)"; \
+	have_ver="$$(echo "$$have" | sed -n 's/.*has version \([^ ]*\).*/\1/p')"; \
+	have_go="$$(echo "$$have" | sed -n 's/.*built with \([^ ]*\).*/\1/p')"; \
+	if [ "$$have_ver" != "$$want_ver" ] || [ "$$have_go" != "$$want_go" ]; then \
+		echo "Installing golangci-lint $(GOLANGCI_VERSION) built with $$want_go"; \
+		echo "  (have: $${have_ver:-none} built with $${have_go:-none})"; \
+		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION) || exit 1; \
+	fi
+
 # Run linter
-lint:
-	@command -v golangci-lint >/dev/null 2>&1 || { \
-		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
-	}
+lint: ensure-golangci-lint
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run
 
 # Run enhanced linter with comprehensive analysis
-lint-enhanced:
-	@command -v golangci-lint >/dev/null 2>&1 || { \
-		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest; \
-	}
+lint-enhanced: ensure-golangci-lint
 	export PATH=$$PATH:$$(go env GOPATH)/bin && golangci-lint run \
 		--enable=asasalint,asciicheck,bidichk,bodyclose,containedctx,contextcheck,cyclop,decorder,dogsled,dupl,durationcheck,errcheck,errchkjson,errname,errorlint,exhaustive,copyloopvar,forbidigo,forcetypeassert,funlen,ginkgolinter,gocheckcompilerdirectives,gochecknoinits,gocognit,goconst,gocritic,gocyclo,godot,godox,goheader,mnd,gomoddirectives,gomodguard,goprintffuncname,gosec,gosmopolitan,govet,grouper,ineffassign,interfacebloat,lll,loggercheck,maintidx,makezero,misspell,nakedret,nestif,nilerr,nilnil,noctx,nolintlint,nonamedreturns,nosprintfhostport,prealloc,predeclared,promlinter,reassign,revive,rowserrcheck,sqlclosecheck,staticcheck,tagalign,usetesting,testableexamples,testpackage,thelper,tparallel,unconvert,unparam,unused,usestdlibvars,varnamelen,wastedassign,whitespace,wrapcheck,zerologlint
 
@@ -234,21 +258,32 @@ gosec:
 	}
 	export PATH=$$PATH:$$(go env GOPATH)/bin && gosec ./...
 
-# Run betteralign for struct field alignment optimization
+# Report struct field alignment opportunities. ADVISORY — run it yourself; it is
+# deliberately NOT part of quality/quality-strict.
+#
+# Two reasons it is not a gate. First, its -apply/-fix modes rewrite source, and
+# a quality *check* must never mutate the tree it is checking; fieldalignment
+# -fix in particular reorders fields without updating positional composite
+# literals that use them, which silently breaks test tables (a compile error at
+# best, a swapped value at worst). Second, "most compact" and "readable"
+# genuinely conflict: several structs here deliberately keep each mutex next to
+# the fields it guards, which these tools will always flag. That is a permanent
+# finding, not a defect, and a gate that can never go green is worse than no
+# gate. Read the report, apply by hand what is worth it.
 betteralign:
 	@command -v betteralign >/dev/null 2>&1 || { \
 		echo "Installing betteralign..."; \
 		go install github.com/dkorunic/betteralign/cmd/betteralign@latest; \
 	}
-	export PATH=$$PATH:$$(go env GOPATH)/bin && betteralign -apply ./...
+	export PATH=$$PATH:$$(go env GOPATH)/bin && betteralign ./...
 
-# Run fieldalignment for memory layout optimization
+# Report fieldalignment findings (report-only; see the betteralign note above).
 fieldalignment:
 	@command -v fieldalignment >/dev/null 2>&1 || { \
 		echo "Installing fieldalignment..."; \
 		go install golang.org/x/tools/go/analysis/passes/fieldalignment/cmd/fieldalignment@latest; \
 	}
-	export PATH=$$PATH:$$(go env GOPATH)/bin && fieldalignment -fix ./...
+	export PATH=$$PATH:$$(go env GOPATH)/bin && fieldalignment ./...
 
 # Check for goroutine leaks
 goleak:
@@ -263,53 +298,96 @@ go-licenses:
 		go install github.com/google/go-licenses@latest; \
 	}
 	@echo "Checking license compliance..."
-	@export PATH=$$PATH:$$(go env GOPATH)/bin && go-licenses check . || echo "⚠️  License compliance issues detected (see above)"
+	@export PATH=$$PATH:$$(go env GOPATH)/bin && go-licenses check .
+
+# Reinstall every go-installed analysis tool with the Go toolchain currently in
+# use. These tools link go/types from the Go version that COMPILED them, so a
+# binary left over from an older toolchain fails inside the new standard library
+# ("could not import ...", "package X without types", "does not have module
+# info") rather than reporting anything about this project. The `command -v`
+# guards elsewhere only check that a tool is present, not that it still works,
+# so run this after every Go upgrade.
+tools-refresh:
+	@echo "Refreshing analysis tools with $$(go env GOVERSION)..."
+	@for tool in \
+		github.com/client9/misspell/cmd/misspell@latest \
+		github.com/dkorunic/betteralign/cmd/betteralign@latest \
+		github.com/fzipp/gocyclo/cmd/gocyclo@latest \
+		github.com/go-critic/go-critic/cmd/gocritic@latest \
+		github.com/google/go-licenses@latest \
+		github.com/gordonklaus/ineffassign@latest \
+		github.com/psampaz/go-mod-outdated@latest \
+		github.com/securego/gosec/v2/cmd/gosec@latest \
+		golang.org/x/tools/go/analysis/passes/fieldalignment/cmd/fieldalignment@latest \
+		golang.org/x/vuln/cmd/govulncheck@latest \
+		honnef.co/go/tools/cmd/staticcheck@latest \
+		mvdan.cc/gofumpt@latest; do \
+		echo "  $$tool"; \
+		go install "$$tool" || exit 1; \
+	done
+	@$(MAKE) ensure-golangci-lint
+	@echo "✓ Analysis tools refreshed"
 
 # Development workflow (build + quality checks)
 dev: build quality
 
 # Run all quality checks
 quality: check-fmt test
+	@rm -f $(QUALITY_FAILFILE)
 	@echo "Running go vet..."
-	@$(MAKE) vet || echo "⚠️  Go vet found issues (see above)"
+	@$(MAKE) vet || { echo "⚠️  Go vet found issues (see above)"; echo "vet" >> $(QUALITY_FAILFILE); }
 	@echo "Running linter..."
-	@$(MAKE) lint || echo "⚠️  Linter found issues (see above)"
+	@$(MAKE) lint || { echo "⚠️  Linter found issues (see above)"; echo "lint" >> $(QUALITY_FAILFILE); }
 	@echo "Running complexity check..."
-	@$(MAKE) cyclo || echo "⚠️  High complexity functions found (see above)"
+	@$(MAKE) cyclo || { echo "⚠️  High complexity functions found (see above)"; echo "cyclo" >> $(QUALITY_FAILFILE); }
 	@echo "Running ineffectual assignment check..."
-	@$(MAKE) ineffassign || echo "⚠️  Ineffectual assignments found (see above)"
+	@$(MAKE) ineffassign || { echo "⚠️  Ineffectual assignments found (see above)"; echo "ineffassign" >> $(QUALITY_FAILFILE); }
 	@echo "Running misspelling check..."
-	@$(MAKE) misspell || echo "⚠️  Misspellings found (see above)"
+	@$(MAKE) misspell || { echo "⚠️  Misspellings found (see above)"; echo "misspell" >> $(QUALITY_FAILFILE); }
 	@echo "Running vulnerability check..."
-	@$(MAKE) govulncheck || echo "⚠️  Security vulnerabilities found (see above)"
+	@$(MAKE) govulncheck || { echo "⚠️  Security vulnerabilities found (see above)"; echo "govulncheck" >> $(QUALITY_FAILFILE); }
 	@echo "Running go-critic check..."
-	@$(MAKE) gocritic || echo "⚠️  Go-critic found issues (see above)"
+	@$(MAKE) gocritic || { echo "⚠️  Go-critic found issues (see above)"; echo "gocritic" >> $(QUALITY_FAILFILE); }
 	@echo "Running security analysis..."
-	@$(MAKE) gosec || echo "⚠️  Security issues found (see above)"
+	@$(MAKE) gosec || { echo "⚠️  Security issues found (see above)"; echo "gosec" >> $(QUALITY_FAILFILE); }
 	@echo "Running module dependency check..."
-	@$(MAKE) modcheck || echo "⚠️  Module dependencies need updating (see above)"
+	@$(MAKE) modcheck || { echo "⚠️  Module dependencies need updating (see above)"; echo "modcheck" >> $(QUALITY_FAILFILE); }
 	@echo "Running module verification..."
-	@$(MAKE) modverify || echo "⚠️  Module verification failed (see above)"
+	@$(MAKE) modverify || { echo "⚠️  Module verification failed (see above)"; echo "modverify" >> $(QUALITY_FAILFILE); }
 	@echo "Running dependency count check..."
-	@$(MAKE) depcount || echo "⚠️  Dependency count check failed (see above)"
+	@$(MAKE) depcount || { echo "⚠️  Dependency count check failed (see above)"; echo "depcount" >> $(QUALITY_FAILFILE); }
 	@echo "Running outdated dependency check..."
-	@$(MAKE) depoutdated || echo "⚠️  Outdated dependency check failed (see above)"
+	@$(MAKE) depoutdated || { echo "⚠️  Outdated dependency check failed (see above)"; echo "depoutdated" >> $(QUALITY_FAILFILE); }
 	@echo "Running goroutine leak check..."
-	@$(MAKE) goleak || echo "⚠️  Goroutine leak check failed (see above)"
+	@$(MAKE) goleak || { echo "⚠️  Goroutine leak check failed (see above)"; echo "goleak" >> $(QUALITY_FAILFILE); }
 	@echo "Running license compliance check..."
-	@$(MAKE) go-licenses || echo "⚠️  License compliance check failed (see above)"
+	@$(MAKE) go-licenses || { echo "⚠️  License compliance check failed (see above)"; echo "go-licenses" >> $(QUALITY_FAILFILE); }
+	@if [ -f $(QUALITY_FAILFILE) ]; then \
+		echo ""; \
+		echo "✗ Quality checks completed WITH FAILURES:"; \
+		echo "   (if a tool failed inside the Go standard library rather than"; \
+		echo "    in this project, run 'make tools-refresh' — see that target)"; \
+		sed "s/^/    - /" $(QUALITY_FAILFILE); \
+		rm -f $(QUALITY_FAILFILE); \
+		exit 1; \
+	fi
 	@echo "✓ Core quality checks completed!"
 
 # Run quality checks with strict enforcement
-quality-strict: check-fmt vet lint cyclo ineffassign misspell govulncheck gocritic gosec betteralign fieldalignment goleak go-licenses modcheck modverify depcount depoutdated test
+#
+# test-race is included here, not just in quality-enhanced: the engine's push
+# stream, poll recomputes and the metrics handler all mutate shared state behind
+# mutexes, so a data race is the most likely defect in this codebase and the one
+# ordinary tests are least likely to catch.
+quality-strict: check-fmt vet lint cyclo ineffassign misspell govulncheck gocritic gosec goleak go-licenses modcheck modverify depcount depoutdated test test-race
 	@echo "✓ All quality checks passed with strict enforcement!"
 
 # Run enhanced quality checks (includes race detection, benchmarks, and standalone staticcheck)
-quality-enhanced: check-gofumpt vet lint cyclo ineffassign misspell govulncheck gocritic gosec betteralign fieldalignment goleak go-licenses modcheck modverify depcount depoutdated staticcheck test test-race bench
+quality-enhanced: check-gofumpt vet lint cyclo ineffassign misspell govulncheck gocritic gosec goleak go-licenses modcheck modverify depcount depoutdated staticcheck test test-race bench
 	@echo "✓ All enhanced quality checks passed!"
 
 # Run comprehensive quality checks with maximum linter coverage
-quality-comprehensive: check-gofumpt vet lint-enhanced cyclo ineffassign misspell govulncheck gocritic gosec betteralign fieldalignment goleak go-licenses modcheck modverify depcount depoutdated staticcheck test test-race bench
+quality-comprehensive: check-gofumpt vet lint-enhanced cyclo ineffassign misspell govulncheck gocritic gosec goleak go-licenses modcheck modverify depcount depoutdated staticcheck test test-race bench
 	@echo "✓ All comprehensive quality checks passed!"
 
 # Download dependencies
@@ -458,6 +536,7 @@ help:
 	@echo "  gofumpt      - Format code with gofumpt (stricter than gofmt)"
 	@echo "  check-gofumpt - Check if code is formatted with gofumpt"
 	@echo "  lint         - Run golangci-lint"
+	@echo "  tools-refresh - Reinstall analysis tools with the current Go toolchain"
 	@echo "  lint-enhanced - Run enhanced linter with comprehensive analysis"
 	@echo "  cyclo        - Check cyclomatic complexity with gocyclo"
 	@echo "  vet          - Run go vet for suspicious constructs"
@@ -466,8 +545,8 @@ help:
 	@echo "  govulncheck  - Check for security vulnerabilities"
 	@echo "  gocritic     - Run go-critic for additional static analysis patterns"
 	@echo "  gosec        - Run gosec for security-focused analysis"
-	@echo "  betteralign  - Optimize struct field alignment for better memory layout"
-	@echo "  fieldalignment - Check and fix struct field memory layout optimization"
+	@echo "  betteralign  - Advisory: report struct alignment opportunities (not a gate)"
+	@echo "  fieldalignment - Advisory: report struct memory layout findings (not a gate)"
 	@echo "  goleak       - Check for goroutine leaks in tests"
 	@echo "  go-licenses  - Check license compliance of dependencies"
 	@echo "  staticcheck  - Run standalone staticcheck for additional static analysis"

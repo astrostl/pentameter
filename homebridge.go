@@ -79,43 +79,42 @@ const (
 )
 
 type hbAccessory struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-	On   bool   `json:"on"`
-
 	// Thermostat fields (kind=="thermostat"). Temperatures are Celsius (HomeKit's
 	// internal unit); the shim sets the display unit. Pointers so a real 0 isn't
 	// confused with "absent".
-	CurC    *float64 `json:"curC,omitempty"`  // current water temperature
-	HeatC   *float64 `json:"heatC,omitempty"` // heat setpoint (LOTMP)
-	CoolC   *float64 `json:"coolC,omitempty"` // cool setpoint (HITMP), if CanCool
-	CanCool bool     `json:"canCool,omitempty"`
-	State   string   `json:"state,omitempty"` // off | idle | heat | cool
+	CurC  *float64 `json:"curC,omitempty"`  // current water temperature
+	HeatC *float64 `json:"heatC,omitempty"` // heat setpoint (LOTMP)
+	CoolC *float64 `json:"coolC,omitempty"` // cool setpoint (HITMP), if CanCool
 
 	// Light-sensor field (kind=="lightsensor"). The raw metric value, which the
 	// shim encodes as lux (HomeKit has no read-only numeric tile; lux is the
 	// least-bad raw-number channel). Pointer so a real 0 isn't confused with absent.
-	Lux *float64 `json:"lux,omitempty"`
+	Lux   *float64 `json:"lux,omitempty"`
+	ID    string   `json:"id"`
+	Name  string   `json:"name"`
+	Kind  string   `json:"kind"`
+	State string   `json:"state,omitempty"` // off | idle | heat | cool
+
+	On      bool `json:"on"`
+	CanCool bool `json:"canCool,omitempty"`
 }
 
 type hbSet struct {
-	T  string `json:"t"`
-	ID string `json:"id"`
-	On bool   `json:"on"`
-
 	// Thermostat command fields (t=="tset"). Pointers so an absent field is
 	// distinguishable from a zero value; each is applied independently as the
 	// matching HomeKit characteristic changes.
 	HeatC *float64 `json:"heatC,omitempty"` // heat setpoint (Celsius) -> LOTMP
 	CoolC *float64 `json:"coolC,omitempty"` // cool setpoint (Celsius) -> HITMP
-	Mode  string   `json:"mode,omitempty"`  // off | on  -> HTSRC (none / heater)
+	T     string   `json:"t"`
+	ID    string   `json:"id"`
+	Mode  string   `json:"mode,omitempty"` // off | on  -> HTSRC (none / heater)
+	On    bool     `json:"on"`
 }
 
 // hbEmitter serializes newline-JSON writes to stdout.
 type hbEmitter struct {
-	mu sync.Mutex
 	w  *bufio.Writer
+	mu sync.Mutex
 }
 
 func newHBEmitter(w io.Writer) *hbEmitter { return &hbEmitter{w: bufio.NewWriter(w)} }
@@ -195,7 +194,7 @@ type hbMetrics struct {
 
 // startHBMetrics registers the gauges, serves /metrics, and starts a push-driven
 // recompute. It returns a handle whose onScan does the full poll-cadence refresh.
-func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
+func startHBMetrics(ctx context.Context, engine *intellicenter.Engine, port string) *hbMetrics {
 	met := &hbMetrics{pm: NewPoolMonitor("", "", false)}
 	registry := createPrometheusRegistry()
 
@@ -217,7 +216,7 @@ func startHBMetrics(engine *intellicenter.Engine, port string) *hbMetrics {
 	// Bind synchronously: metrics is secondary to HomeKit, so a port conflict is
 	// logged and ignored rather than fatal. Binding before we advertise/log means
 	// we never claim to be "serving" an endpoint that failed to bind.
-	ln, err := bindMetricsServer(registry, met.pm, port)
+	ln, err := bindMetricsServer(ctx, registry, met.pm, port)
 	if err != nil {
 		log.Printf("[homebridge] metrics server disabled: %v (HomeKit unaffected)", err)
 		return met
@@ -275,9 +274,9 @@ func (m *hbMetrics) onScan(engine *intellicenter.Engine, err error) {
 // shim once the accessory list has been announced. It flips published at the
 // first baseline and stays so across reconnects (which re-announce idempotently).
 type hbPublisher struct {
+	lastSig   string // membership signature of the last announced accessory list
 	mu        sync.Mutex
 	published bool
-	lastSig   string // membership signature of the last announced accessory list
 }
 
 // announce publishes the accessory list with current state and marks the shim
@@ -461,7 +460,7 @@ func hbRun(ctx context.Context, engine *intellicenter.Engine, out *hbEmitter, cm
 	// in production (httpPort has a default); tests pass "" to skip binding a port.
 	var metrics *hbMetrics
 	if metricsPort != "" {
-		metrics = startHBMetrics(engine, metricsPort)
+		metrics = startHBMetrics(ctx, engine, metricsPort)
 		defer metrics.close()
 	}
 	// Connection health: report connected/disconnected to the shim on change.
@@ -539,9 +538,9 @@ func hbApplySets(engine *intellicenter.Engine, cmds <-chan hbSet) {
 // hbWant records an intended ("ought") body value for one HomeKit command, so we
 // can reconcile it against the controller's actual ("is") state after the write.
 type hbWant struct {
+	got   func(*intellicenter.Body) string
 	label string // human label for logs, e.g. "heat setpoint"
 	want  string // intended value, stringified to match the read-side param
-	got   func(*intellicenter.Body) string
 }
 
 // hbApplyThermostat applies one thermostat command (any subset of heat setpoint,
@@ -654,15 +653,15 @@ func hbCircuitItems(snap intellicenter.Snapshot) []hbAccessory {
 	sort.Strings(ids)
 	items := make([]hbAccessory, 0, len(ids))
 	for _, id := range ids {
-		c := snap.Circuits[id]
-		if !c.Feature { // only circuits flagged as Features in IntelliCenter
+		circuit := snap.Circuits[id]
+		if !circuit.Feature { // only circuits flagged as Features in IntelliCenter
 			continue
 		}
 		kind := hbKindSwitch
-		if isLightSubType(c.SubType) {
+		if isLightSubType(circuit.SubType) {
 			kind = hbKindLightbulb
 		}
-		items = append(items, hbAccessory{ID: c.ID, Name: c.Name, Kind: kind, On: c.On})
+		items = append(items, hbAccessory{ID: circuit.ID, Name: circuit.Name, Kind: kind, On: circuit.On})
 	}
 	return items
 }

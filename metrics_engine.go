@@ -20,6 +20,15 @@ import (
 // legacy poll — so cross-object logic (freeze protection, thermal interpretation,
 // feature visibility, stale cleanup) stays exactly as published.
 func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
+	// The work is split out so its deferred cleanup (mDNS teardown) actually
+	// runs: log.Fatalf calls os.Exit, which skips defers, so the fatal exit
+	// has to happen here — after serveMetricsEngine has returned and unwound.
+	if err := serveMetricsEngine(cfg, registry); err != nil {
+		log.Fatalf("HTTP server failed: %v", err)
+	}
+}
+
+func serveMetricsEngine(cfg *appConfig, registry *prometheus.Registry) error {
 	pm := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, false)
 	engine := intellicenter.NewEngine(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.pollInterval)
 	engine.Logf = log.Printf
@@ -77,15 +86,13 @@ func runMetricsEngine(cfg *appConfig, registry *prometheus.Registry) {
 		}()
 	}
 
-	ln, err := bindMetricsServer(registry, pm, cfg.httpPort)
+	ln, err := bindMetricsServer(context.Background(), registry, pm, cfg.httpPort)
 	if err != nil {
-		log.Fatalf("HTTP server failed: %v", err)
+		return err
 	}
 	log.Printf("Starting Prometheus metrics server on :%s", cfg.httpPort)
 	log.Printf("Metrics available at http://localhost:%s/metrics", cfg.httpPort)
-	if err := serveMetrics(ln); err != nil {
-		log.Fatalf("HTTP server failed: %v", err)
-	}
+	return serveMetrics(ln)
 }
 
 // refreshFromEngine recomputes every metric from the engine's current raw snapshot,
