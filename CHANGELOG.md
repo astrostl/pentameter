@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-13
+
+### Fixed
+- **mDNS advertisement is now torn down when the metrics server exits** - `runMetricsEngine` registered the mDNS teardown with `defer`, then ended the function with `log.Fatalf` on server failure. `log.Fatalf` calls `os.Exit`, which does not run deferred functions, so the teardown never executed and pentameter left its service advertisement behind on exit. The work is now split into `serveMetricsEngine`, which returns an error and unwinds its defers normally, with the fatal exit moved to the caller.
+
+### Changed
+- **Quality checks now fail the build instead of reporting success over failures** - `make quality` could print `✓ Core quality checks completed!` while individual linters had crashed or failed above it, which is how `make lint` stayed broken unnoticed. Each sub-check now records its failure, and the target names every failed check and exits non-zero. `golangci-lint` is pinned (`GOLANGCI_VERSION`) and reinstalled automatically when the installed binary's version *or* the Go toolchain it was compiled with drifts — a linter built by an older Go cannot typecheck a newer standard library and fails inside the stdlib rather than reporting anything about this project. A new `make tools-refresh` rebuilds every analysis tool against the current toolchain. `make quality-strict` now includes `test-race`.
+- **Struct alignment tools are advisory, not a gate** - `betteralign` and `fieldalignment` are no longer part of any `quality*` target and no longer run in rewrite mode. Their `-apply`/`-fix` modes mutate the source tree mid-check, and `fieldalignment -fix` reorders struct fields without updating positional composite literals that reference them. Run them by hand and apply what is worth it.
+
+### Dependencies
+- Bump `golang.org/x/net` from 0.58.0 to 0.59.0
+- Bump `golang.org/x/sys` from 0.47.0 to 0.48.0
+
 ## [0.6.2] - 2026-09-13
 
 ### Changed
